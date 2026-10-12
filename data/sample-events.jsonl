@@ -1,0 +1,20 @@
+{"type": "join", "user": "Minh Tuấn", "ts": 1791749673.68}
+{"type": "join", "user": "Lan Anh", "ts": 1791749674.08}
+{"type": "join", "user": "Phương Thảo", "ts": 1791749674.48}
+{"type": "join", "user": "Thu Trang", "ts": 1791749674.88}
+{"type": "gift", "user": "Hoàng Nam", "gift_name": "Hoa hồng", "count": 1, "ts": 1791749679.15}
+{"type": "chat", "user": "Ngọc Mai", "text": "Áo thun cotton có size XL không shop?", "ts": 1791749679.72}
+{"type": "gift", "user": "Thu Trang", "gift_name": "Hoa hồng", "count": 1, "ts": 1791749681.23}
+{"type": "chat", "user": "Thu Trang", "text": "Tai nghe bluetooth này dùng được mấy tiếng vậy?", "ts": 1791749683.16}
+{"type": "chat", "user": "Ngọc Mai", "text": "Kem dưỡng ẩm còn hàng không shop?", "ts": 1791749684.1}
+{"type": "order", "user": "Lan Anh", "product": "Áo thun nam Cotton Compact", "amount": 150000, "ts": 1791749686.12}
+{"type": "join", "user": "Đức Huy", "ts": 1791749687.17}
+{"type": "gift", "user": "Đức Huy", "gift_name": "Tên lửa", "count": 1, "ts": 1791749687.88}
+{"type": "chat", "user": "Đức Huy", "text": "Kem dưỡng ẩm còn hàng không shop?", "ts": 1791749690.07}
+{"type": "order", "user": "Lan Anh", "product": "Tai nghe True Wireless Bass Boost", "amount": 450000, "ts": 1791749692.03}
+{"type": "chat", "user": "Ngọc Mai", "text": "Tai nghe bass boost có bảo hành không ạ?", "ts": 1791749692.69}
+{"type": "chat", "user": "Đức Huy", "text": "Tai nghe bluetooth này dùng được mấy tiếng vậy?", "ts": 1791749694.34}
+{"type": "chat", "user": "Lan Anh", "text": "Có freeship không ạ?", "ts": 1791749696.17}
+{"type": "order", "user": "Minh Tuấn", "product": "Áo thun nam Cotton Compact", "amount": 150000, "ts": 1791749698.38}
+{"type": "join", "user": "Phương Thảo", "ts": 1791749699.78}
+{"type": "order", "user": "Hoàng Nam", "product": "Áo thun nam Cotton Compact", "amount": 150000, "ts": 1791749701.02}

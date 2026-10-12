@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Dashboard Simulator</title>
+</head>
+<body>
+    <h1>TikTok Shop LIVE Simulator</h1>
+    <div id="chat-log" style="border:1px solid #ccc; height:200px; overflow-y:auto; margin-bottom:10px; padding: 5px;"></div>
+    
+    <button onclick="sendEvent('join')">Join</button>
+    <button onclick="sendEvent('chat')">Chat Hỏi SP</button>
+    <button onclick="sendEvent('gift')">Gift</button>
+    <button onclick="sendEvent('order')">Order</button>
+
+    <script>
+        function log(msg) {
+            const div = document.getElementById('chat-log');
+            div.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${msg}</div>`;
+            div.scrollTop = div.scrollHeight;
+        }
+
+        async function sendEvent(type) {
+            let data = { type: type, user: "test_user_" + Math.floor(Math.random()*100), ts: Date.now() };
+            if (type === 'chat') data.text = "Sản phẩm này giá bao nhiêu?";
+            
+            log(`Sending: ${JSON.stringify(data)}`);
+            try {
+                const res = await fetch('http://127.0.0.1:8000/event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!res.ok) throw new Error("Backend not responding");
+                const resData = await res.json();
+                log(`Success: ${JSON.stringify(resData)}`);
+            } catch (err) {
+                log(`Fallback (static): Lỗi kết nối tới backend - ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

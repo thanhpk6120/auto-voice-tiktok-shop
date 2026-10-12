@@ -1,0 +1,25 @@
+.env
+.env*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.sqlite
+*.db
+
+# Heavy dependencies & vendors
+vendor/
+node_modules/
+local_cache/
+
+# Output files & audio
+out/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

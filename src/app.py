@@ -52,9 +52,10 @@ def process_event(event, queue, no_play: bool = False) -> bool:
 
 
 def handle_simulate(args=None) -> None:
+    interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
-    print(f"Starting simulation... (no_play={no_play})")
-    queue = PriorityAudioQueue()
+    print(f"Starting simulation... (no_play={no_play}, interrupt_mode={interrupt_mode})")
+    queue = PriorityAudioQueue(interrupt_mode=interrupt_mode)
     gen = iter_events(seed=42)
     # Lấy 10 sự kiện (4 join batch + vài cái sau)
     events = [next(gen) for _ in range(10)]
@@ -98,9 +99,12 @@ def _stream_events(args, stop_event: threading.Event):
 
 
 def handle_run(args) -> int:
+    interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
-    queue = PriorityAudioQueue(on_play=play, dry_run=no_play).start()
+    queue = PriorityAudioQueue(
+        on_play=play, dry_run=no_play, interrupt_mode=interrupt_mode
+    ).start()
     stop_event = threading.Event()
     stats = {"spoke": 0, "tts_ok": 0, "tts_fail": 0, "lat_ms": []}
 
@@ -120,7 +124,10 @@ def handle_run(args) -> int:
             stats["tts_fail"] += 1
         stats["lat_ms"].append(tts_client.last_latency_ms())
 
-    print(f"[run] bat dau (no_play={no_play}, seconds={args.seconds or 'vo han'}). Ctrl+C de dung.")
+    print(
+        f"[run] bat dau (no_play={no_play}, interrupt_mode={interrupt_mode}, "
+        f"seconds={args.seconds or 'vo han'}). Ctrl+C de dung."
+    )
     t0 = time.monotonic()
     received = 0  # dem o vong lap nhan: stats do worker tang nen bi tre
     try:
@@ -218,8 +225,8 @@ def _check_bridge(url: str, window: float) -> tuple[bool, str]:
 
 
 def _check_queue() -> tuple[bool, str]:
-    q = PriorityAudioQueue(dry_run=True)
-    q.put("greeting", 3, "hi", "a.wav")
+    interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
+    q = PriorityAudioQueue(dry_run=True, interrupt_mode=interrupt_mode)
     q.put("order", 1, "cam on", "b.wav")
     size_after = q.qsize()
     order = [q.get()["priority"], q.get()["priority"]]

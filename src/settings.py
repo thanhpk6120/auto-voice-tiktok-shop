@@ -44,6 +44,7 @@ DEFAULTS: dict = {
     # Audio
     "audio_device": "",
     "no_play": False,
+    "interrupt_mode": "finish",
     # Analyzer
     "context_dir": "context-data",
     "out_dir": "out",
@@ -67,6 +68,7 @@ SECTIONS: dict = {
     "Audio & Analyzer": [
         "audio_device",
         "no_play",
+        "interrupt_mode",
         "context_dir",
         "out_dir",
         "greeting_cooldown_s",
@@ -252,7 +254,7 @@ def apply(cfg: dict | None = None) -> dict:
 
     # audio_player doc os.environ moi lan phat -> set env la du (process moi thua huong)
     os.environ["AUDIO_OUTPUT_DEVICE"] = str(cfg["audio_device"])
-
+    os.environ["INTERRUPT_MODE"] = str(cfg.get("interrupt_mode", "finish"))
     # analyzer
     try:
         import event_analyzer  # type: ignore

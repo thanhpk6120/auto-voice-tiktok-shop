@@ -43,7 +43,7 @@ def test_worker_plays_in_priority_order():
 def test_interrupt_when_priority1_arrives():
     """p1 (order) den khi dang phat p3 (greeting) -> item dang phat bi ngat."""
     log: list = []
-    q = PriorityAudioQueue(on_play=_fake_player(2.0, log, "greeting"))
+    q = PriorityAudioQueue(on_play=_fake_player(2.0, log, "greeting"), interrupt_mode="interrupt")
     q.start()
     q.put("greeting", 3, "cau chao dai", "g.wav")
     time.sleep(0.3)  # de worker bat dau phat
@@ -59,7 +59,7 @@ def test_interrupt_when_priority1_arrives():
 def test_no_interrupt_on_priority2():
     """p2 (chat) khong duoc phep ngat p1 dang phat, va p1 khong ngat p2."""
     log: list = []
-    q = PriorityAudioQueue(on_play=_fake_player(0.3, log, "chat"))
+    q = PriorityAudioQueue(on_play=_fake_player(0.3, log, "chat"), interrupt_mode="interrupt")
     q.start()
     q.put("sales", 2, "tu van", "s.wav")
     time.sleep(0.1)

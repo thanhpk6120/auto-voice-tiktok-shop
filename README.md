@@ -254,7 +254,7 @@ python src/gui.py          # chạy từ source
 | LLM | `llm_base_url`, `llm_api_key`, `llm_model`, `llm_timeout_s` |
 | VoiceStudio TTS | `voicestudio_url`, `voicestudio_voice`, `voicestudio_model`, `tts_timeout_s` |
 | Event Bridge | `bridge_url`, `bridge_port` |
-| Audio & Analyzer | `audio_device`, `no_play`, `context_dir`, `out_dir`, `greeting_cooldown_s`, `greeting_max_batch`, `sales_max_words` |
+| Audio & Analyzer | `audio_device`, `no_play`, `interrupt_mode` (`finish`/`interrupt`), `context_dir`, `out_dir`, `greeting_cooldown_s`, `greeting_max_batch`, `sales_max_words` |
 
 Config lưu ở `%APPDATA%\AutoVoiceTikTokShop\config.json` (không ghi vào thư mục app →
 chạy được cả khi đặt trong `Program Files`). Ghi đè bằng biến môi trường
@@ -273,7 +273,8 @@ Ví dụ `config.json`:
   "voicestudio_voice": "alloy",
   "bridge_url": "ws://127.0.0.1:8765/ws?role=app",
   "audio_device": "",
-  "greeting_cooldown_s": 3.0
+  "greeting_cooldown_s": 3.0,
+  "interrupt_mode": "finish"
 }
 ```
 

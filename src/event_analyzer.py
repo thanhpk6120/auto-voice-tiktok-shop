@@ -43,6 +43,41 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# prefix la bullet markdown: bat buoc co khoang trang sau dau (khac "**bold**")
+_BULLET_RE = re.compile(r"^([-*•]|\d+[.)])\s+")
+_NOTE_PREFIXES = ("→", "->", "=>", "#", "ghi chú", "note:", "lưu ý:")
+_NOTE_WORDS = ("cần xác nhận", "cần kiểm tra", "nếu shop")
+
+
+def clean_speak_text(text: str, max_words: int = 45) -> str:
+    """Bo ghi chu noi bo / markdown khoi cau LLM truoc khi dua cho TTS.
+
+    LLM doi khi tra kem dong huong dan ("-> Can xac nhan...") hoac bullet; doc len live
+    la loi. Giu lai toi da `max_words` tu cua cau thoai dau tien.
+    """
+    if not text:
+        return ""
+    lines = []
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if not line:
+            lines.append("")
+            continue
+        low = line.lower()
+        if _BULLET_RE.match(line) or low.startswith(_NOTE_PREFIXES) or any(w in low for w in _NOTE_WORDS):
+            continue
+        lines.append(line)
+    body = " ".join(l for l in lines if l).strip()
+    body = body.replace("**", "").replace("__", "").replace("`", "")
+    body = re.sub(r'\s+', " ", body).strip().strip('"').strip("'").strip()
+    if not body:
+        return ""
+    words = body.split(" ")
+    if len(words) > max_words:
+        body = " ".join(words[:max_words]).rstrip(",;:") + "."
+    return body
+
+
 class ChatIntent:
     """Detect câu hỏi về SP từ context-data/*.md và trả lời RAG."""
 
@@ -108,7 +143,8 @@ class ChatIntent:
                     from . import llm_client as _llm
                 except Exception:
                     import llm_client as _llm  # type: ignore
-            return _llm.chat(system, user_prompt)
+            reply = clean_speak_text(_llm.chat(system, user_prompt))
+            return reply or None
         except Exception:
             price_val = prod.get('price', '')
             if price_val:

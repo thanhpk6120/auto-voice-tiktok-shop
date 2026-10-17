@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "TikTok Shop Live Event Bridge",
+  "version": "1.0.0",
+  "description": "Bat event that (join/chat/gift/order) tu TikTok Shop LIVE dashboard va gui ve WebSocket local ws://127.0.0.1:8765",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://shop.tiktok.com/*",
+    "https://*.tiktok.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://shop.tiktok.com/streamer/live/*",
+        "https://shop.tiktok.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "TikTok Live Bridge"
+  }
+}

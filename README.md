@@ -128,15 +128,85 @@ Khung chat tại `https://shop.tiktok.com/streamer/live/product/dashboard` là k
 - [ ] **Giai đoạn 4:** Xây dựng Client kết nối VoiceStudio Local API (`localhost:3900`) và Priority Audio Queue xuất ra Virtual Audio Cable.
 - [ ] **Giai đoạn 5:** Hoàn thiện giao diện Settings (Cấu hình LLM, VoiceStudio endpoint, template chào, thời gian cooldown).
 
-## Chạy thử (Windows)
+## Chạy thật (Windows)
+
+Pipeline thật: TikTok Shop Dashboard (extension) -> **event bridge** (WebSocket `ws://127.0.0.1:8765`) -> `event_analyzer` -> VoiceStudio TTS (`:3900`) -> **priority audio queue** -> loa.
+
+### Bước 0. Cài phụ thuộc
+```powershell
+pip install websockets sounddevice numpy
+```
+- `websockets`: bridge + app client. `sounddevice`/`numpy`: phát WAV có thể **ngắt giữa chừng** (priority 1 chen ngang). Thiếu `sounddevice` thì tự lùi về `winsound` (không ngắt được).
+
+### Bước 1. Bật VoiceStudio (TTS engine, cổng 3900)
+```powershell
+# Ví dụ (xem chi tiết trong docs/VOICESTUDIO-INSTALL.md)
+cd vendor\VoiceStudio
+start VoiceStudio.exe          # hoặc: bun run dev
+```
+Kiểm tra: `curl http://127.0.0.1:3900/system/info` phải trả JSON (`app_version`).
+
+### Bước 2. Bật event bridge
+```powershell
+# Không cần extension (tự sinh event gia lập để test):
+python src/event_bridge.py serve --port 8765 --sim --speed 1.0
+
+# Hoặc chỉ chờ event thật từ extension:
+python src/event_bridge.py serve --port 8765
+```
+- Bridge lắng nghe `ws://127.0.0.1:8765/ws`, hai vai trò qua query param: `?role=source` (extension gửi lên) và `?role=app` (app nhận về).
+
+### Bước 3. Load extension vào Chrome/Edge
+1. Mở `chrome://extensions` -> bật **Developer mode**.
+2. **Load unpacked** -> chọn thư mục `extension/` của repo.
+3. Mở dashboard `https://shop.tiktok.com/streamer/live/product/dashboard` -> extension tự bắt DOM (chat/gift/order/join) và gửi về bridge; xem log ở DevTools console (`[bridge/content]`).
+
+Kiểm tra event có chảy qua bridge không (không cần extension):
+```powershell
+python scripts/run_bridge.py --duration 20          # in event nhan duoc tu bridge
+python scripts/send_test_events.py --events 6       # gia lap client role=source gui event that
+```
+Hoặc mở `ui/index.html` bằng trình duyệt rồi bấm nút Join / Chat / Gift / Order (trang gửi thẳng vào `ws://127.0.0.1:8765/ws?role=source`).
+
+### Bước 4. Chạy app (vòng lặp thật)
+```powershell
+python src/app.py run                          # nhận event tu bridge, phat ra loa
+python src/app.py run --no-play                # test khong phat tieng
+python src/app.py run --max-events 5           # tu dung sau 5 event
+python src/app.py run --seconds 60             # tu dung sau 60 giay
+python src/app.py run --sim                    # khong can bridge, dung simulator noi bo
+```
+Dừng bằng `Ctrl+C`; app in `=== RUN SUMMARY ===` (event nhận, câu đã đọc, TTS latency min/avg/max, thống kê queue).
+
+### Bước 5. Chẩn đoán (doctor)
+```powershell
+python src/app.py doctor
+```
+In trạng thái: VoiceStudio health, LLM health, thiết bị loa ra, bridge (số event nhận trong cửa sổ nghe), hàng đợi ưu tiên, simulator. Exit code `0` = tất cả OK, `1` = có thành phần FAIL.
+
+### Cấu hình (.env, tùy chọn)
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `VOICE_URL` | `http://127.0.0.1:3900` | Endpoint VoiceStudio |
+| `VOICE_MODEL` | `omnivoice` | TTS engine của VoiceStudio |
+| `VOICE_NAME` | `default` | Voice profile / preset |
+| `TTS_TIMEOUT` | `60` | Timeout giây cho 1 lần synthesize |
+| `BRIDGE_URL` | `ws://127.0.0.1:8765/ws?role=app` | Bridge cho `run`/`doctor` |
+| `AUDIO_OUTPUT_DEVICE` | (mặc định) | Index (số) hoặc một phần tên thiết bị loa |
+| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | xem `src/config.py` | LLM OpenAI-compatible cho analyzer |
+
+### Chạy lại đúng kết quả đã kiểm chứng
+- Bằng chứng phiên chạy thật (doctor + simulate + run + phát tiếng + latency): [`docs/TEST-E2E-REAL.md`](docs/TEST-E2E-REAL.md).
+
+## Chạy thử nhanh (không cần server)
 
 Để chạy thử ứng dụng và kiểm tra pipeline từ sự kiện tới hàng đợi âm thanh:
 
-1. **Chạy mô phỏng sự kiện (CLI):**
+1. **Chạy mô phỏng sự kiện (CLI, không cần VoiceStudio):**
    ```bash
-   python src/app.py simulate
+   python src/app.py simulate --no-play
    ```
-   Lệnh này sẽ mô phỏng các sự kiện (join, chat hỏi giá, order) và hiển thị log: `event → speak_text → wav → queue-size`.
+   Lệnh này mô phỏng các sự kiện (join/chat/gift/order) và in log `event -> speak_text -> wav -> priority -> queue-size` rồi in thứ tự xả hàng đợi theo ưu tiên (p1 -> p2 -> p3).
 
 2. **Chạy toàn bộ bài test:**
    ```bash

@@ -14,30 +14,38 @@
     <button onclick="sendEvent('order')">Order</button>
 
     <script>
-        function log(msg) {
+        // Gui event that ve event bridge (role=source) -> app.py run/doc nhan duoc.
+        const BRIDGE_WS = "ws://127.0.0.1:8765/ws?role=source";
+        let ws = null;
+
+        function log(msg, cls) {
             const div = document.getElementById('chat-log');
-            div.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${msg}</div>`;
+            div.innerHTML += `<div${cls ? ` style="color:${cls}"` : ''}>${new Date().toLocaleTimeString()} - ${msg}</div>`;
             div.scrollTop = div.scrollHeight;
         }
 
-        async function sendEvent(type) {
-            let data = { type: type, user: "test_user_" + Math.floor(Math.random()*100), ts: Date.now() };
-            if (type === 'chat') data.text = "Sản phẩm này giá bao nhiêu?";
-            
-            log(`Sending: ${JSON.stringify(data)}`);
-            try {
-                const res = await fetch('http://127.0.0.1:8000/event', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                if (!res.ok) throw new Error("Backend not responding");
-                const resData = await res.json();
-                log(`Success: ${JSON.stringify(resData)}`);
-            } catch (err) {
-                log(`Fallback (static): Lỗi kết nối tới backend - ${err.message}`);
-            }
+        function connect() {
+            ws = new WebSocket(BRIDGE_WS);
+            ws.onopen = () => log(`da ket noi bridge ${BRIDGE_WS}`, "green");
+            ws.onclose = () => { log("mat ket noi, thu lai sau 2s", "orange"); setTimeout(connect, 2000); };
+            ws.onerror = () => { try { ws.close(); } catch (e) {} };
         }
+
+        function sendEvent(type) {
+            const data = { type: type, user: "test_user_" + Math.floor(Math.random() * 100), ts: Date.now() / 1000 };
+            if (type === 'chat') data.text = "Sản phẩm này giá bao nhiêu?";
+            if (type === 'gift') { data.gift = "Hoa hồng"; data.count = 1; }
+            if (type === 'order') { data.product = "Áo thun nam Cotton Compact"; data.amount = 150000; }
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log(`chua ket noi bridge, bo qua: ${JSON.stringify(data)}`, "red");
+                return;
+            }
+            ws.send(JSON.stringify(data));
+            log(`Sent: ${JSON.stringify(data)}`);
+        }
+
+        connect();
     </script>
 </body>
 </html>

@@ -1,0 +1,4 @@
+# Runtime deps cho pipeline that (event bridge + phat audio co interrupt)
+websockets>=14
+sounddevice>=0.5
+numpy>=1.26

@@ -141,16 +141,118 @@ Sửa: `run_internal()` ghi lại `sys.argv` rồi khôi phục trong `finally`.
 `llm_client` đọc `src.config`, nhưng `settings.apply()` set module `config` — hai module
 object khác nhau. Sửa: set **cả hai** tên qua `importlib.import_module`.
 
+### 3e. GUI bản frozen mở cửa sổ thật (không chỉ import)
+
+Kiểm chứng bằng Win32 `EnumWindows`, không đoán theo thời gian sống của process:
+
+```python
+p = subprocess.Popen([r"dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe"])
+time.sleep(7)
+# EnumWindows -> loc title chua "Auto Voice"
+```
+
+Kết quả:
+
+```text
+Windows match 'Auto Voice':
+   ('Auto Voice TikTok Shop - Cấu hình', 15588, 886, 599)
+PID cua process: 15588
+```
+
+- Title đúng: `Auto Voice TikTok Shop - Cấu hình`
+- Kích thước cửa sổ: **886 × 599**
+- PID cửa sổ **khớp** PID process (15588) → cửa sổ thuộc đúng app, không phải window khác.
+
+### 3f. Child spawn bản frozen (bug 4a đã sửa)
+
+`gui.child_cmd()` bản frozen sinh ra `[<exe>, "--internal", ...]`. Chạy đúng lệnh đó:
+
+```text
+$ dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe --internal doctor
+[doctor] ket qua: TAT CA OK
+EXIT 0
+```
+
+→ Cùng code path mà nút **Khởi động** / **Doctor** dùng. Trước khi sửa, lệnh này mở lại GUI
+thay vì chạy pipeline.
+
+### 3g. Chạy từ vị trí khác, CWD khác, APPDATA sạch (mô phỏng máy mới)
+
+Copy `dist/AutoVoiceTikTokShop/` sang `local_cache/relocate_test/`, xoá `APPDATA` sạch,
+chạy với `cwd=C:\`:
+
+```text
+[doctor] Auto Voice TikTok Shop - chan doan
+  OK   VoiceStudio    : OK http://127.0.0.1:3900 v0.5.6 (15 voices)
+  OK   LLM            : OK http://192.168.1.68:20130/v1 model=claude-sonnet-5 latency=4438ms reply='OK. Chưa có task. Đưa yêu cầu cụ thể.'
+  OK   Audio output   : G27Q (NVIDIA High Definition Au (index=4)
+  FAIL Bridge         : FAIL ws://127.0.0.1:8765/ws?role=app -> ConnectionRefusedError: [WinError 10061]
+  OK   Audio queue    : OK uu tien dung p1 truoc p3 (order=[1, 3]), size 0->2->0
+  OK   Event simulator: OK 10 event(s) sinh duoc
+[doctor] ket qua: CO VAN DE (Bridge)
+```
+
+- `context-data` được resolve **cạnh `.exe`**, không phụ thuộc `cwd` → RAG vẫn chạy đúng từ `C:\`.
+- `out/` sinh ra cạnh `.exe` (`dist/AutoVoiceTikTokShop/out/`).
+- Trên máy mới không có config: app dùng `DEFAULTS` và chạy ngay, không crash.
+
+### 4d. Tiếng Việt bị mất khi stdout là pipe (bug nặng, đã sửa)
+
+**Triệu chứng:** chạy `.exe --internal doctor` qua `subprocess`/redirect, dòng chứa tiếng Việt
+(kể cả `LLM : OK ... reply='Được.'`) **mất hoàn toàn** khỏi stdout. Log file `logs/cli.log`
+thì vẫn có đủ.
+
+**Root cause:** trên Windows, khi `stdout` là pipe/file, Python dùng `cp1252`. Ghi ký tự
+tiếng Việt ném `UnicodeEncodeError`. `_Tee.write()` bắt mọi exception rồi bỏ qua:
+
+```python
+def write(self, data: str) -> int:
+    for st in self._streams:
+        try:
+            st.write(data); st.flush()
+        except Exception:
+            pass      # <-- nuot UnicodeEncodeError => CA DONG bi mat
+```
+
+Log file (mở với `encoding="utf-8"`) ghi được, stdout pipe (cp1252) thì không → dòng bị mất
+chỉ ở stdout. Bug này ảnh hưởng trực tiếp GUI vì GUI spawn tiến trình con qua pipe.
+
+**Fix:** `_force_utf8(sys.stdout/stderr)` gọi `stream.reconfigure(encoding="utf-8", errors="replace")`
+trước khi tee.
+
+**Bằng chứng trước/sau** (`subprocess.run(..., capture_output=True)`, raw bytes):
+
+```text
+TRUOC: len stdout = 534 | co chu 'LLM' trong stdout: False
+SAU  : co dong LLM: True
+       OK   LLM : OK http://192.168.1.68:20130/v1 model=claude-sonnet-5 latency=4438ms reply='OK. Chưa có task. Đưa yêu cầu cụ thể.'
+```
+
+Và với `simulate`:
+
+```text
+TRUOC: so event line qua PIPE: 0
+SAU  : so event line qua PIPE: 7
+   event=gift -> speak_text='Cảm ơn Hoàng Nam đã tặng Hoa hồng!' -> priority=1 -> queue-size=1 [no-play]
+   event=chat -> speak_text='Shop chưa có dữ liệu size cho áo này, mình không chốt bừa. ...' -> priority=2
+   event=join(flushed) -> speak_text="What'up Minh Tuấn, Lan Anh, Phương Thảo, Thu Trang!" -> queue-size=7
+EXIT 0
+```
+
+**Regression test:** `tests/test_launcher_encoding.py` — 4 test, trong đó
+`test_tee_swallows_vietnamese_loss_but_other_stream_keeps_it` tái hiện đúng cơ chế mất dòng
+(stream cp1252 không ghi được, stream utf-8 nhận nguyên văn).
+
 ## 5. Test suite
 
 ```text
 $ python -m pytest tests/ -q
-36 passed
+41 passed
 ```
 
 ## Chưa làm / khi nào cần
 
 - **Chưa code-sign** `.exe`: Windows SmartScreen sẽ cảnh báo khi chạy trên máy khác. Cần chứng chỉ code-signing khi phát hành cho người dùng cuối.
 - **Chưa làm installer** (Inno Setup/MSIX): hiện phân phối dạng ZIP thư mục onedir.
-- **Chưa test GUI bằng tay trên bản frozen** (chỉ test import + build). Cần mở `.exe` không tham số trên máy đích để xác nhận cửa sổ tkinter hiển thị.
+- **Chưa click tay từng nút trên GUI frozen**: đã xác nhận cửa sổ mở đúng (mục 3e) và child spawn đúng (mục 3f), nhưng chưa bấm thử từng nút bằng chuột trên bản `.exe`.
 - **Chưa nhúng VoiceStudio backend**: app chỉ là client, trỏ `voicestudio_url` tới VoiceStudio ở máy local hoặc LAN. Model OmniVoice ~2.5GB + CUDA nên không nhúng được vào `.exe`.

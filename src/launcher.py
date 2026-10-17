@@ -95,8 +95,27 @@ def ensure_console() -> str:
         return f"error:{type(e).__name__}"
 
 
+def _force_utf8(stream) -> None:
+    """Ep stream sang UTF-8 truoc khi tee.
+
+    Mac dinh tren Windows, stdout dang pipe/file dung cp1252 -> ghi tieng Viet nem
+    UnicodeEncodeError, va `_Tee` nuot loi nen DONG DO BI MAT hoan toan (khong phai
+    chi hong ky tu). Trai qua that: dong `[doctor] ... LLM ... reply='Duoc.'` bien mat
+    khoi stdout khi GUI spawn tien trinh con.
+    """
+    reconf = getattr(stream, "reconfigure", None)
+    if reconf is None:
+        return
+    try:
+        reconf(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def install_tee() -> Path:
     """Tee stdout/stderr ra logs/cli.log. Goi som nhat co the trong main()."""
+    _force_utf8(sys.stdout)
+    _force_utf8(sys.stderr)
     log_path = _log_dir() / "cli.log"
     try:
         f = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)

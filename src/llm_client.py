@@ -1,13 +1,19 @@
 import json
 import urllib.request
 import urllib.error
-from src.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
 
-def chat(system: str, user: str, model: str | None = None, timeout: float = 20.0) -> str:
-    url = f"{LLM_BASE_URL}/chat/completions"
+def chat(system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:
+    # Doc dong tu config: settings.apply() doi key/url/model co tac dung ngay.
+    try:  # chay tu goc repo (app.py them goc repo vao sys.path)
+        import src.config as c
+    except ImportError:  # frozen/onedir: chi con package phang `config`
+        import config as c  # type: ignore[no-redef]
+
+    timeout = float(getattr(c, "LLM_TIMEOUT_S", 20.0)) if timeout is None else timeout
+    url = f"{c.LLM_BASE_URL}/chat/completions"
     payload = {
-        "model": model or LLM_MODEL,
+        "model": model or c.LLM_MODEL,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -15,8 +21,8 @@ def chat(system: str, user: str, model: str | None = None, timeout: float = 20.0
     }
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    if c.LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {c.LLM_API_KEY}"
     last_err: Exception | None = None
     for _ in range(2):  # retry 1 lan
         try:

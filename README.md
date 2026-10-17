@@ -217,3 +217,68 @@ In trạng thái: VoiceStudio health, LLM health, thiết bị loa ra, bridge (s
 
 3. **Mở giao diện Web giả lập:**
    - Mở file `ui/index.html` trực tiếp trên trình duyệt để bấm thử các nút bắn sự kiện (Join, Chat, Gift, Order).
+
+## Build .exe (chạy trên máy khác)
+
+Đóng gói onedir bằng PyInstaller (đã kiểm chứng: exe 5.3 MB, dist 61.2 MB):
+
+```powershell
+python scripts/build_exe.py
+```
+
+Kết quả: `dist/AutoVoiceTikTokShop/AutoVoiceTikTokShop.exe`. Copy **nguyên thư mục**
+`dist/AutoVoiceTikTokShop/` sang máy khác là chạy được (máy đích: Windows 10/11 x64).
+
+```powershell
+# Mở GUI cấu hình (không tham số)
+dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe
+
+# Hoặc dùng CLI
+dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe doctor
+dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe run
+dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe simulate --no-play
+```
+
+### Cấu hình kết nối (GUI hoặc file JSON)
+
+GUI tkinter có form đầy đủ, chia nhóm, nút **Lưu / Kiểm tra kết nối / Khởi động / Dừng / Doctor**,
+log realtime, dropdown chọn thiết bị loa:
+
+```powershell
+python src/gui.py          # chạy từ source
+# hoặc: .exe không tham số
+```
+
+| Nhóm | Thông số |
+|---|---|
+| LLM | `llm_base_url`, `llm_api_key`, `llm_model`, `llm_timeout_s` |
+| VoiceStudio TTS | `voicestudio_url`, `voicestudio_voice`, `voicestudio_model`, `tts_timeout_s` |
+| Event Bridge | `bridge_url`, `bridge_port` |
+| Audio & Analyzer | `audio_device`, `no_play`, `context_dir`, `out_dir`, `greeting_cooldown_s`, `greeting_max_batch`, `sales_max_words` |
+
+Config lưu ở `%APPDATA%\AutoVoiceTikTokShop\config.json` (không ghi vào thư mục app →
+chạy được cả khi đặt trong `Program Files`). Ghi đè bằng biến môi trường
+`AUTO_VOICE_CONFIG=<duong dan json>` khi cần nhiều profile.
+
+Thứ tự ưu tiên: **file JSON → biến môi trường (.env) → DEFAULTS**.
+
+Ví dụ `config.json`:
+
+```json
+{
+  "llm_base_url": "http://192.168.1.68:20130/v1",
+  "llm_api_key": "sk-...",
+  "llm_model": "claude-sonnet-5",
+  "voicestudio_url": "http://127.0.0.1:3900",
+  "voicestudio_voice": "alloy",
+  "bridge_url": "ws://127.0.0.1:8765/ws?role=app",
+  "audio_device": "",
+  "greeting_cooldown_s": 3.0
+}
+```
+
+> **VoiceStudio không được nhúng vào `.exe`.** App là client: trỏ `voicestudio_url` tới
+> VoiceStudio ở máy local hoặc máy khác trong LAN. Model OmniVoice ~2.5 GB + CUDA nên
+> không đóng gói kèm được.
+
+Bằng chứng build + config override: [`docs/TEST-BUILD.md`](docs/TEST-BUILD.md).

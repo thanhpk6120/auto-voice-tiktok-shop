@@ -10,8 +10,9 @@ from pathlib import Path
 class GreetingBatcher:
     """Gộp user join trong window cooldown thành một câu chào."""
 
-    def __init__(self, cooldown: float = 3.0, templates: list[str] | None = None):
+    def __init__(self, cooldown: float = 3.0, max_batch: int = 5, templates: list[str] | None = None):
         self.cooldown = cooldown
+        self.max_batch = max(1, int(max_batch))
         self.templates = templates or ["Chào", "Hello", "Xin chào", "What'up"]
         self._users: list[str] = []
         self._window_start: float | None = None
@@ -27,6 +28,8 @@ class GreetingBatcher:
         if self._window_start is None:
             self._window_start = now
         self._users.append(user)
+        if len(self._users) >= self.max_batch:
+            return self.flush()
         return None
 
     def flush(self) -> str | None:
@@ -40,7 +43,13 @@ class GreetingBatcher:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    """Goc repo (source) hoac thu muc canh .exe (frozen). Xem settings._project_root()."""
+    try:
+        import settings
+
+        return settings._project_root()
+    except Exception:
+        return Path(__file__).resolve().parent.parent
 
 
 # prefix la bullet markdown: bat buoc co khoang trang sau dau (khac "**bold**")
@@ -84,7 +93,14 @@ class ChatIntent:
     def __init__(self, context_dir: str | Path = "context-data"):
         p = Path(context_dir)
         if not p.is_absolute():
-            p = _project_root() / p
+            # frozen: context-data nam trong _internal (_MEIPASS), co the bi ghi de
+            # bang ban copy canh .exe -> settings.resolve_path lo thu tu do.
+            try:
+                import settings
+
+                p = settings.resolve_path(p)
+            except Exception:
+                p = _project_root() / p
         self.context_dir = p
         self.products: list[dict] = []
         self._load()
@@ -143,7 +159,7 @@ class ChatIntent:
                     from . import llm_client as _llm
                 except Exception:
                     import llm_client as _llm  # type: ignore
-            reply = clean_speak_text(_llm.chat(system, user_prompt))
+            reply = clean_speak_text(_llm.chat(system, user_prompt), max_words=_MAX_WORDS)
             return reply or None
         except Exception:
             price_val = prod.get('price', '')
@@ -155,21 +171,48 @@ class ChatIntent:
             return f"Dạ anh/chị ơi, {prod['name']} hiện shop vẫn còn hàng{price_str}, mình chốt đơn giúp shop nhé!"
 
 
+# Cau hinh runtime (settings.apply() ghi vao day)
+_DEFAULT_COOLDOWN: float = 3.0
+_DEFAULT_MAX_BATCH: int = 5
+_DEFAULT_MAX_WORDS: int = 45
+_CONTEXT_DIR: str = "context-data"
+_MAX_BATCH: int = _DEFAULT_MAX_BATCH
+_MAX_WORDS: int = _DEFAULT_MAX_WORDS
+
 _intent: ChatIntent | None = None
 _batcher: GreetingBatcher | None = None
+
+
+def configure(context_dir=None, cooldown=None, max_batch=None, max_words=None) -> None:
+    """Ap cau hinh runtime; tham so None giu gia tri hien tai.
+
+    Ep singleton ve None de lan goi ke tiep rebuild voi tham so moi.
+    """
+    global _CONTEXT_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
+    if context_dir is not None:
+        _CONTEXT_DIR = str(context_dir)
+        _intent = None
+    if max_batch is not None:
+        _MAX_BATCH = max(1, int(max_batch))
+    if max_words is not None:
+        _MAX_WORDS = max(1, int(max_words))
+    _batcher = GreetingBatcher(
+        cooldown=_DEFAULT_COOLDOWN if cooldown is None else float(cooldown),
+        max_batch=_MAX_BATCH,
+    )
 
 
 def _get_intent() -> ChatIntent:
     global _intent
     if _intent is None:
-        _intent = ChatIntent()
+        _intent = ChatIntent(_CONTEXT_DIR)
     return _intent
 
 
 def get_batcher() -> GreetingBatcher:
     global _batcher
     if _batcher is None:
-        _batcher = GreetingBatcher(cooldown=3.0)
+        _batcher = GreetingBatcher(cooldown=_DEFAULT_COOLDOWN, max_batch=_MAX_BATCH)
     return _batcher
 
 

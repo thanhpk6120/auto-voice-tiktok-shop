@@ -48,6 +48,19 @@ def _resolve_device():
     return None
 
 
+def list_output_devices() -> list[dict]:
+    """Danh sach thiet bi ra: [{'index': int, 'name': str}]. Rong neu thieu sounddevice."""
+    if not _SD_OK:
+        return []
+    try:
+        return [
+            {"index": idx, "name": str(dev.get("name", ""))}
+            for idx, dev in enumerate(sd.query_devices())
+            if dev.get("max_output_channels", 0) > 0
+        ]
+    except Exception:
+        return []
+
 def output_device_name() -> str:
     """Ten thiet bi loa dang dung (cho lenh `doctor`)."""
     if not _SD_OK:

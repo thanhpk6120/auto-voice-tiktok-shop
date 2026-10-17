@@ -33,7 +33,16 @@ def last_latency_ms() -> float:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    """Thu muc GHI duoc: canh .exe khi frozen, goc repo khi chay source.
+
+    Khong dung _MEIPASS vi do la thu muc read-only (co the bi xoa khi thoat).
+    """
+    try:
+        import settings
+
+        return settings._project_root()
+    except Exception:
+        return Path(__file__).resolve().parent.parent
 
 
 def _generate_sine_wav(path: Path, freq: float = 440.0, duration: float = 1.0, sample_rate: int = 16000) -> None:

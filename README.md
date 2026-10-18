@@ -375,3 +375,112 @@ Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUO
   tự cắt bỏ trước khi đưa cho TTS.
 - **Giữ CTA khi cắt bớt câu dài:** nếu vượt `sales_max_words`, câu chốt đơn ("bấm giỏ hàng...") được giữ lại ở cuối.
 - **Simulator sinh đủ 6 loại sự kiện:** thêm `viewing_product` vào `event_simulator.py` để test được luồng ưu tiên P1 tại chỗ (`--sim`).
+
+---
+
+## 13. Tính năng nâng cấp: Crawl sản phẩm, Phân loại ý định & Prompt JSON
+
+### 13.1 Danh sách sản phẩm Live đọc từ browser (không dùng AI)
+
+Nút **🔄 Tải lại giỏ hàng live** (tab *Sản phẩm Live*) dùng CDP để đọc DOM trang
+`https://shop.tiktok.com/streamer/live/product/dashboard` và trả về:
+
+| Trường | Nguồn lấy |
+|---|---|
+| `index` | số thứ tự tính lại theo bảng sau khi lọc |
+| `id` | `data-product-id`, `data-id`, `data-e2e`, hoặc query `product_id=` trong href |
+| `name` | `[class*="title"]`, `[class*="name"]`, `h3`, `h4`, hoặc dòng text đầu hợp lệ |
+| `price` | `[class*="price"]`, `[data-e2e*="price"]`, fallback regex `\d[\d.,]*\s*(₫|đ|VND|k)` |
+| `is_pinned` | text chứa "đang ghim"/"đang giới thiệu", hoặc class chứa `pin` |
+| `url` | href tuyệt đối của thẻ `<a>` trong row |
+
+Logic **linh động**: thử 3 nhóm selector theo thứ tự ưu tiên (`arco-table-tr` → `tr`/`ProductItem` → `li`/`product`),
+nhóm nào ra kết quả thì dừng; dedupe theo `id`. **Không gọi AI** ở bước này.
+
+### 13.2 Nút **📥 Load context-live**
+
+Thay cho nút *Lưu vào context-live* cũ. Với từng sản phẩm trong bảng:
+
+1. Mở link sản phẩm trong tab CDP, chờ `document.readyState === 'complete'`.
+2. Lấy **tên**, **mô tả sản phẩm**, và **tối đa 10 comment/đánh giá đầu tiên**
+   (nếu trang ít hơn thì lấy hết những gì có, kể cả 0).
+3. Ghi ra `context-live/` với tên file suy ra **từ tên sản phẩm** (slug bỏ dấu).
+
+**Chống trùng:** file chỉ mục `context-live/_index.json` giữ khoá `<id>||<slug>`, giá trị là tên file.
+
+| Trường hợp | Kết quả |
+|---|---|
+| Trùng **cả tên và id** | **Ghi đè** đúng file cũ, không tạo file mới |
+| Cùng **tên** nhưng **khác id** | 2 sản phẩm khác nhau → file thứ hai thêm hậu tố `-<id>` |
+| Khác tên | Tạo file mới |
+
+Tên file suy ra **từ tên sản phẩm** (`kem-duong-da-cap-am-water-gel.md`), không dùng tiền tố thứ tự giỏ hàng.
+`context-live/README.md` được bỏ qua khi nạp ngữ cảnh, không bị coi là sản phẩm.
+
+### 13.3 Phân loại ý định bằng model AI cấu hình được (`analyst_llm_model`)
+
+Luồng: **bình luận → phân loại ý định → chọn đúng prompt → gọi LLM → đọc JSON**.
+
+| Ý định | Prompt dùng | Ưu tiên |
+|---|---|---|
+| `greeting` | `system_greeting` | chat: 2, join: 3 |
+| `product_question` | `system_sales` | 2 |
+| `order` | `system_order` | 1 |
+| `gift` | `system_gift` | 1 |
+| `chat` / `other` | `system_chat` | 2 |
+
+- Model phân tích đặt ở cấu hình `analyst_llm_model` (ví dụ `openrouter/typesafe/jev-router`),
+  timeout ở `analyst_llm_timeout_s`. Để trống → tắt AI, dùng **luật từ khoá dự phòng**
+  (`classify_intent_rules`).
+- Khi model phân tích lỗi (ví dụ gateway trả `429 Too Many Requests`), log ghi rõ lý do qua
+  `intent_router.last_analyze_error()` và tự động chuyển sang luật dự phòng — không làm dừng phiên live.
+- Câu hỏi sản phẩm: dò sản phẩm trong **context-live trước**, fallback **context-data**
+  (`ChatIntent` đọc cả hai thư mục, sản phẩm từ context-live thắng khi hoà điểm).
+
+### 13.4 Tab **Quản lý Prompt** (sửa prompt ngay trong app)
+
+- Combobox chọn prompt → `ScrolledText` hiển thị nội dung → **💾 Lưu prompt** ghi thẳng ra `prompts/*.md`
+  (có hiệu lực ở lần gọi LLM kế tiếp).
+- Nút **⬇ Tải danh sách model** gọi `/v1/models` của server LLM, đổ vào dropdown (gồm cả model `jev`;
+  đã kiểm chứng tải được 1184 model từ gateway nội bộ).
+- Nút **💾 Lưu model** ghi `analyst_llm_model` vào file cấu hình, áp dụng ngay, **và đồng bộ sang ô
+  cấu hình tương ứng ở tab LLM** để lần "Lưu cấu hình"/"Bắt đầu" sau không ghi đè mất giá trị vừa chọn.
+
+### 13.5 Mọi prompt đều "only JSON" + có JSON mẫu
+
+7 prompt: `system_analyzer`, `system_greeting`, `system_sales`, `system_order`, `system_gift`,
+`system_chat`, `system_batch`. Mỗi prompt đều yêu cầu **chỉ trả về JSON** và **kèm JSON mẫu**
+để model bám theo. `intent_router.build_speak_prompt()` tự ghép phần ràng buộc JSON vào prompt nền.
+
+Đọc kết quả bằng `src/json_utils.py` — chịu được mọi kiểu JSON lỗi thường gặp của LLM:
+
+| Lỗi LLM hay mắc | Cách xử lý |
+|---|---|
+| Bọc trong ```` ```json ... ``` ```` | `strip_code_fence()` |
+| Có lời dẫn/lời kết quanh JSON | `extract_json_block()` cắt khối cân bằng ngoặc |
+| Nháy đơn `'value'` | `_single_to_double()` |
+| Key/giá trị không nháy `{ type: greeting }` | regex thêm nháy, loại trừ literal JSON |
+| Dấu phẩy thừa `[...,]` | regex bỏ phẩy trước `}` `]` |
+| `True`/`False`/`None`/`NaN` | đổi về `true`/`false`/`null` |
+| Nháy cong `“ ”` | map về nháy thẳng |
+| Xuống dòng thật trong chuỗi | escape thành `\n` |
+| Comment JS, BOM, ký tự điều khiển | loại bỏ |
+| JSON kiểu Python | fallback `ast.literal_eval` |
+
+Trợ giúp đọc khoá: `get_str`, `get_int`, `get_bool` chấp nhận nhiều tên khoá (kể cả tiếng Việt
+có dấu) và tự ép kiểu.
+
+### 13.6 Sản phẩm khách đang xem (`viewing_product`)
+
+Sự kiện này đi qua đúng luồng phân tích: đối chiếu sản phẩm với **context-live trước**, fallback
+**context-data**, rồi gọi LLM với prompt `system_sales` để tư vấn đúng sản phẩm. Mẫu câu cứng chỉ
+dùng khi LLM lỗi.
+
+### 13.7 Ngôn ngữ trong app
+
+Toàn bộ chuỗi hiển thị (log, tooltip, label, hộp thoại, `--help`) dùng **tiếng Việt có dấu**:
+
+- **34/34 tooltip** cấu hình trong `settings.FIELD_DOCS` đều có dấu.
+- Log CLI (`[run]`, `[doctor]`, `[browser]`, `[BRIDGE]`, `[settings]`) đã Việt hoá có dấu.
+- Thuật ngữ kỹ thuật giữ nguyên: `TTS`, `bridge`, `CDP`, `join`, `no-play`, `LLM`.
+

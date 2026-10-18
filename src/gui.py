@@ -448,6 +448,11 @@ class App:
         self.nb.add(self.tab_products, text="Sản phẩm Live")
         self._build_products_tab(self.tab_products)
 
+        # Tab Quan ly Prompt
+        self.tab_prompts = ttk.Frame(self.nb, padding=6)
+        self.nb.add(self.tab_prompts, text="Quản lý Prompt")
+        self._build_prompts_tab(self.tab_prompts)
+
         # Tab Huong dan Clone Giong
         self.tab_clone_guide = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_clone_guide, text="Hướng dẫn Clone Giọng")
@@ -519,7 +524,7 @@ class App:
         ttk.Label(lf2, text="Chốt đơn (order):").grid(row=2, column=0, sticky="w", padx=6, pady=4)
         ttk.Label(lf2, textvariable=self.stat_order_var).grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(lf2, text="Tham gia (join):").grid(row=2, column=2, sticky="w", padx=6, pady=4)
+        ttk.Label(lf2, text="Tham gia (join)").grid(row=2, column=2, sticky="w", padx=6, pady=4)
         ttk.Label(lf2, textvariable=self.stat_join_var).grid(row=2, column=3, sticky="w", padx=6, pady=4)
 
         # Frame 3: Hang doi & Phat am
@@ -559,11 +564,19 @@ class App:
 
         btn_reload = ttk.Button(top_bar, text="🔄 Tải lại giỏ hàng live", command=self._reload_live_products)
         btn_reload.pack(side="left", padx=4)
-        ToolTip(btn_reload, "Kết nối CDP vào trình duyệt để quét danh sách sản phẩm trong giỏ hàng live hiện tại")
+        ToolTip(
+            btn_reload,
+            "Kết nối CDP vào trình duyệt và đọc trực tiếp danh sách sản phẩm trong mục Sản phẩm của "
+            "https://shop.tiktok.com/streamer/live/product/dashboard. Chỉ dùng logic đọc DOM, không dùng AI.",
+        )
 
-        btn_save = ttk.Button(top_bar, text="📥 Lưu vào context-live", command=self._save_live_products)
-        btn_save.pack(side="left", padx=4)
-        ToolTip(btn_save, "Lưu danh sách sản phẩm thành các file markdown trong thư mục context-live để AI tư vấn")
+        self.btn_load_ctx = ttk.Button(top_bar, text="📥 Load context-live", command=self._load_context_live)
+        self.btn_load_ctx.pack(side="left", padx=4)
+        ToolTip(
+            self.btn_load_ctx,
+            "Mở từng link sản phẩm trong trình duyệt để lấy tên, mô tả và 10 đánh giá/bình luận đầu tiên rồi lưu vào thư mục context-live. "
+            "Sản phẩm trùng cả tên và id sẽ bị ghi đè, không tạo file mới.",
+        )
 
         btn_open = ttk.Button(top_bar, text="📁 Mở thư mục context-live", command=self._open_context_live_dir)
         btn_open.pack(side="left", padx=4)
@@ -598,21 +611,14 @@ class App:
         def _fetch():
             self.live_prod_status_var.set("Đang quét sản phẩm từ trình duyệt...")
             import browser_manager
+            # Bắt buộc lấy danh sách sản phẩm THẬT từ trình duyệt (không dùng context cục bộ).
             prods = browser_manager.fetch_live_products_cdp()
             if not prods:
-                try:
-                    import event_analyzer
-                    intent = event_analyzer._get_intent()
-                    prods = []
-                    for idx, p in enumerate(intent.products, 1):
-                        prods.append({
-                            "index": p.get("index") or idx,
-                            "name": p.get("name", ""),
-                            "price": p.get("price", "Ưu đãi"),
-                            "is_pinned": idx == 1,
-                        })
-                except Exception:
-                    prods = []
+                self.root.after(0, lambda: self.live_prod_status_var.set(
+                    "Không đọc được sản phẩm từ trình duyệt. Kiểm tra đã mở trang "
+                    "shop.tiktok.com/streamer/live/product/dashboard và bật CDP chưa."
+                ))
+                self._current_live_products = []
 
             self._current_live_products = prods
             self.root.after(0, lambda: self._update_prod_tree(prods))
@@ -630,14 +636,74 @@ class App:
             self.prod_tree.insert("", "end", values=(stt, name, price, pinned))
         self.live_prod_status_var.set(f"Đã cập nhật {len(prods)} sản phẩm trong giỏ hàng.")
 
-    def _save_live_products(self) -> None:
-        if not getattr(self, "_current_live_products", None):
-            messagebox.showinfo("Thông báo", "Vui lòng bấm 'Tải lại giỏ hàng live' trước khi lưu!")
+    def _load_context_live(self) -> None:
+        """Mở từng link sản phẩm, lấy tên + mô tả + 10 đánh giá đầu tiên, lưu vào context-live."""
+        if getattr(self, "_crawling", False):
+            messagebox.showinfo("Đang chạy", "Quá trình Load context-live đang chạy, vui lòng đợi hoàn tất.")
             return
-        import browser_manager
-        saved = browser_manager.save_live_products_to_context_live(self._current_live_products)
-        messagebox.showinfo("Thành công", f"Đã lưu thành công {len(saved)} sản phẩm vào thư mục context-live!")
-        self.live_prod_status_var.set(f"Đã lưu {len(saved)} file vào context-live.")
+        prods = list(getattr(self, "_current_live_products", None) or [])
+        if not prods:
+            messagebox.showinfo(
+                "Thông báo",
+                "Chưa có danh sách sản phẩm. Vui lòng bấm 'Tải lại giỏ hàng live' trước.",
+            )
+            return
+
+        self._crawling = True
+        self.btn_load_ctx.state(["disabled"])
+
+        def _run() -> None:
+            import browser_manager
+
+            ok = 0
+            skipped = 0
+            failed: list[str] = []
+            total = len(prods)
+            try:
+                for i, prod in enumerate(prods, 1):
+                    name = str(prod.get("name") or f"Sản phẩm {i}")
+                    url = str(prod.get("url") or "").strip()
+                    self.root.after(0, lambda i=i, total=total, name=name: self.live_prod_status_var.set(
+                        f"Đang lấy context sản phẩm {i}/{total}: {name[:48]}..."
+                    ))
+                    if not url:
+                        skipped += 1
+                        failed.append(f"{name} (không có link sản phẩm)")
+                        continue
+                    detail = browser_manager.crawl_product_detail_cdp(url, max_reviews=10)
+                    merged = dict(prod)
+                    merged.update({
+                        "id": detail.get("id") or prod.get("id") or "",
+                        "name": detail.get("name") or name,
+                        "url": detail.get("url") or url,
+                        "description": detail.get("description") or "",
+                        "reviews": detail.get("reviews") or [],
+                    })
+                    saved = browser_manager.save_product_context(merged)
+                    if saved:
+                        ok += 1
+                    else:
+                        failed.append(f"{name} (ghi file lỗi)")
+            finally:
+                self._crawling = False
+                self.root.after(0, lambda: self.btn_load_ctx.state(["!disabled"]))
+                self.root.after(0, lambda: self._after_load_context_live(ok, skipped, failed, total))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _after_load_context_live(self, ok: int, skipped: int, failed: list[str], total: int) -> None:
+        self.live_prod_status_var.set(
+            f"Đã load context {ok}/{total} sản phẩm vào context-live (bỏ qua {skipped})."
+        )
+        msg = f"Đã lấy và lưu context cho {ok}/{total} sản phẩm vào thư mục context-live."
+        if skipped:
+            msg += f"\nBỏ qua {skipped} sản phẩm không có link."
+        if failed:
+            preview = "\n".join(f"- {x}" for x in failed[:8])
+            extra = f"\n... và {len(failed) - 8} mục khác" if len(failed) > 8 else ""
+            msg += f"\n\nKhông lấy được:\n{preview}{extra}"
+        (messagebox.showwarning if failed else messagebox.showinfo)("Kết quả Load context-live", msg)
+        self._write(f"[context-live] Đã lưu {ok}/{total} sản phẩm (bỏ qua {skipped}, lỗi {len(failed)}).")
 
     def _open_context_live_dir(self) -> None:
         live_dir = Path(self.cfg.get("context_live_dir", "context-live"))
@@ -651,6 +717,218 @@ class App:
             os.startfile(str(live_dir))
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể mở thư mục: {e}")
+
+    # ------------------------------ tab Quan ly Prompt ------------------------------
+    def _build_prompts_tab(self, parent) -> None:
+        """Đọc/sửa/lưu trực tiếp các file prompt, và cấu hình model AI phân tích."""
+        pad = ttk.Frame(parent, padding=8)
+        pad.pack(fill="both", expand=True)
+
+        # --- Model AI phan tich ---
+        model_box = ttk.LabelFrame(pad, text="Model AI phân tích bình luận (chọn đúng loại prompt)", padding=8)
+        model_box.pack(fill="x", pady=(0, 8))
+
+        row = ttk.Frame(model_box)
+        row.pack(fill="x")
+        ttk.Label(row, text="Model phân tích:").pack(side="left", padx=(0, 6))
+
+        self.analyst_model_var = tk.StringVar(value=str(self.cfg.get("analyst_llm_model", "")))
+        self.analyst_combo = ttk.Combobox(row, textvariable=self.analyst_model_var, width=52)
+        self.analyst_combo.pack(side="left", padx=(0, 6))
+        ToolTip(
+            self.analyst_combo,
+            "Model AI dùng để PHÂN TÍCH bình luận/hoạt động xem khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, "
+            "từ đó mới chọn đúng loại prompt. Để trống = tắt phân tích bằng AI, dùng luật từ khoá dự phòng.",
+        )
+
+        btn_models = ttk.Button(row, text="⬇ Tải danh sách model", command=self._fetch_ai_models)
+        btn_models.pack(side="left", padx=4)
+        ToolTip(btn_models, "Gọi API /v1/models của server LLM để lấy danh sách model thật, gồm cả các model jev đang có.")
+
+        btn_save_model = ttk.Button(row, text="💾 Lưu model", command=self._save_analyst_model)
+        btn_save_model.pack(side="left", padx=4)
+        ToolTip(btn_save_model, "Áp dụng model phân tích đang chọn cho phiên chạy hiện tại và lưu vào file cấu hình.")
+
+        self.analyst_status_var = tk.StringVar(value="")
+        ttk.Label(model_box, textvariable=self.analyst_status_var, foreground="#4a5568").pack(
+            anchor="w", pady=(6, 0)
+        )
+
+        # --- Chon prompt de sua ---
+        edit_box = ttk.LabelFrame(pad, text="Nội dung Prompt (sửa trực tiếp rồi bấm Lưu)", padding=8)
+        edit_box.pack(fill="both", expand=True)
+
+        pick = ttk.Frame(edit_box)
+        pick.pack(fill="x", pady=(0, 6))
+        ttk.Label(pick, text="Chọn prompt:").pack(side="left", padx=(0, 6))
+        self.prompt_pick_var = tk.StringVar(value="")
+        self.prompt_combo = ttk.Combobox(pick, textvariable=self.prompt_pick_var, width=42, state="readonly")
+        self.prompt_combo.pack(side="left", padx=(0, 6))
+        self.prompt_combo.bind("<<ComboboxSelected>>", lambda _e: self._load_prompt_text())
+        ToolTip(self.prompt_combo, "Danh sách prompt trong thư mục prompts/. Mọi prompt đều yêu cầu LLM chỉ trả về JSON.")
+
+        btn_reload_prompt = ttk.Button(pick, text="↻ Đọc lại", command=self._refresh_prompt_list)
+        btn_reload_prompt.pack(side="left", padx=4)
+        ToolTip(btn_reload_prompt, "Đọc lại danh sách file prompt từ thư mục prompts/ trên đĩa.")
+
+        btn_save_prompt = ttk.Button(pick, text="💾 Lưu prompt", command=self._save_prompt_text)
+        btn_save_prompt.pack(side="left", padx=4)
+        ToolTip(btn_save_prompt, "Ghi nội dung đang sửa vào file prompt tương ứng. Có hiệu lực ngay ở lần gọi LLM tiếp theo.")
+
+        btn_open_prompts = ttk.Button(pick, text="📁 Mở thư mục prompts", command=self._open_prompts_dir)
+        btn_open_prompts.pack(side="left", padx=4)
+        ToolTip(btn_open_prompts, "Mở thư mục prompts/ trên máy tính.")
+
+        self.prompt_edit = scrolledtext.ScrolledText(
+            edit_box, wrap="word", font=("Consolas", 10), height=18,
+            background="#ffffff", foreground="#2d3748",
+        )
+        self.prompt_edit.pack(fill="both", expand=True)
+
+        self.prompt_status_var = tk.StringVar(value="")
+        ttk.Label(edit_box, textvariable=self.prompt_status_var, foreground="#4a5568").pack(
+            anchor="w", pady=(6, 0)
+        )
+
+        self._refresh_prompt_list()
+
+    def _prompts_dir(self) -> Path:
+        pdir = Path(self.cfg.get("prompts_dir", "prompts"))
+        if not pdir.is_absolute():
+            try:
+                return settings.resolve_path(pdir)
+            except Exception:
+                return Path(__file__).resolve().parent.parent / pdir
+        return pdir
+
+    def _refresh_prompt_list(self) -> None:
+        pdir = self._prompts_dir()
+        try:
+            names = sorted(f.stem for f in pdir.glob("*.md") if f.name.lower() != "readme.md")
+        except Exception:
+            names = []
+        self.prompt_combo["values"] = names
+        if names and self.prompt_pick_var.get() not in names:
+            self.prompt_pick_var.set(names[0])
+        self._load_prompt_text()
+
+    def _load_prompt_text(self) -> None:
+        name = self.prompt_pick_var.get().strip()
+        if not name:
+            return
+        target = self._prompts_dir() / f"{name}.md"
+        try:
+            content = target.read_text(encoding="utf-8") if target.is_file() else ""
+        except Exception as e:
+            content = ""
+            self.prompt_status_var.set(f"Lỗi đọc file: {e}")
+        self.prompt_edit.delete("1.0", "end")
+        self.prompt_edit.insert("1.0", content)
+        self.prompt_status_var.set(
+            f"{target} — {len(content)} ký tự. Prompt phải yêu cầu LLM chỉ trả về JSON kèm JSON mẫu."
+        )
+
+    def _save_prompt_text(self) -> None:
+        name = self.prompt_pick_var.get().strip()
+        if not name:
+            messagebox.showinfo("Thông báo", "Vui lòng chọn một prompt để lưu.")
+            return
+        content = self.prompt_edit.get("1.0", "end-1c")
+        if not content.strip():
+            if not messagebox.askyesno("Xác nhận", "Nội dung prompt đang trống. Vẫn lưu?"):
+                return
+        if "json" not in content.lower():
+            if not messagebox.askyesno(
+                "Cảnh báo",
+                "Prompt này chưa nhắc tới JSON. Mọi prompt nên yêu cầu LLM chỉ trả về JSON kèm JSON mẫu.\nVẫn lưu?",
+            ):
+                return
+        target = self._prompts_dir() / f"{name}.md"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không ghi được file prompt: {e}")
+            return
+        self.prompt_status_var.set(f"Đã lưu {target} ({len(content)} ký tự).")
+        self._write(f"[prompt] Đã lưu {target.name}")
+        try:
+            import event_analyzer
+            event_analyzer.reload_intent()
+        except Exception:
+            pass
+
+    def _open_prompts_dir(self) -> None:
+        pdir = self._prompts_dir()
+        pdir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(pdir))
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể mở thư mục: {e}")
+
+    def _fetch_ai_models(self) -> None:
+        """Lấy danh sách model thật từ /v1/models của server LLM."""
+        base = str(self.cfg.get("llm_base_url", "")).strip().rstrip("/")
+        if not base:
+            messagebox.showinfo("Thông báo", "Chưa cấu hình llm_base_url trong tab LLM.")
+            return
+        self.analyst_status_var.set("Đang tải danh sách model...")
+
+        def _run() -> None:
+            import json as _json
+            import urllib.request
+
+            url = f"{base}/models"
+            headers = {"User-Agent": "AutoVoiceTikTokShop/1.0"}
+            key = str(self.cfg.get("llm_api_key", "")).strip()
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = _json.loads(resp.read().decode("utf-8"))
+                ids = sorted(
+                    str(m.get("id")) for m in (data.get("data") or []) if m.get("id")
+                )
+            except Exception as e:
+                self.root.after(0, lambda: self.analyst_status_var.set(f"Lỗi tải danh sách model: {e}"))
+                return
+            self.root.after(0, lambda: self._apply_model_list(ids))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply_model_list(self, ids: list[str]) -> None:
+        self.analyst_combo["values"] = ids
+        jev = [m for m in ids if "jev" in m.lower()]
+        self.analyst_status_var.set(
+            f"Đã tải {len(ids)} model. Model jev: {', '.join(jev) if jev else 'không có'}."
+        )
+        if jev and not self.analyst_model_var.get().strip():
+            self.analyst_model_var.set(jev[0])
+        self._write(f"[model] Tải được {len(ids)} model từ server.")
+
+    def _save_analyst_model(self) -> None:
+        model = self.analyst_model_var.get().strip()
+        self.cfg["analyst_llm_model"] = model
+        # Đồng bộ sang widget ở tab LLM, nếu không thì lần bấm "Lưu cấu hình"/"Bắt đầu"
+        # sẽ đọc giá trị cũ từ _Field và ghi đè mất model vừa chọn.
+        for f in getattr(self, "fields", []):
+            try:
+                if f.key == "analyst_llm_model":
+                    f.set_value(model)
+            except Exception:
+                pass
+        try:
+            settings.save(self.cfg)
+            settings.apply(self.cfg)
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không lưu được cấu hình: {e}")
+            return
+        self.analyst_status_var.set(
+            f"Đã lưu model phân tích: {model or '(trống - dùng luật từ khoá dự phòng)'}"
+        )
+        self._write(f"[model] analyst_llm_model = {model or '(trống)'}")
+
 
     # ------------------------------ tab Huong dan Clone Giong ------------------------------
     def _build_clone_guide_tab(self, parent) -> None:
@@ -1064,7 +1342,7 @@ class App:
         cb_pm.grid(row=p_row, column=1, sticky="w", padx=6, pady=2)
 
         p_row += 1
-        ttk.Label(grp_proxy, text="Host / IP:").grid(row=p_row, column=0, sticky="w", pady=2)
+        ttk.Label(grp_proxy, text="Máy chủ / IP:").grid(row=p_row, column=0, sticky="w", pady=2)
         host_var = tk.StringVar()
         ttk.Entry(grp_proxy, textvariable=host_var).grid(row=p_row, column=1, sticky="we", padx=6, pady=2)
 
@@ -1074,7 +1352,7 @@ class App:
         ttk.Entry(grp_proxy, textvariable=port_var, width=12).grid(row=p_row, column=1, sticky="w", padx=6, pady=2)
 
         p_row += 1
-        ttk.Label(grp_proxy, text="Username:").grid(row=p_row, column=0, sticky="w", pady=2)
+        ttk.Label(grp_proxy, text="Tên đăng nhập:").grid(row=p_row, column=0, sticky="w", pady=2)
         user_var = tk.StringVar()
         ttk.Entry(grp_proxy, textvariable=user_var).grid(row=p_row, column=1, sticky="we", padx=6, pady=2)
 

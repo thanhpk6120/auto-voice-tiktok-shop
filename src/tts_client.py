@@ -112,7 +112,7 @@ def synthesize(text: str, out_dir: str | Path = "out") -> Path:
         VOICESTUDIO_OK = False
         LAST_ENGINE = "sine-fallback"
         _local.latency_ms = (time.perf_counter() - t0) * 1000
-        print(f"VOICESTUDIO_OK=false fallback ({type(e).__name__}: {e})")
+        print(f"VOICESTUDIO_OK=false, dùng giọng dự phòng ({type(e).__name__}: {e})")
         _generate_sine_wav(wav_path, freq=440.0, duration=1.0)
         return wav_path
 

@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable, Iterator
@@ -1141,74 +1142,540 @@ def stream_cdp_events(
                 time.sleep(1.0)
 
 
-def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
-    """Kết nối CDP đến trang TikTok Shop live dashboard để đọc danh sách sản phẩm trong giỏ hàng hiện tại."""
-    target = get_cdp_target(cdp_port=cdp_port)
-    if not target or not target.get("webSocketDebuggerUrl"):
-        return []
 
-    ws_url = target["webSocketDebuggerUrl"]
+# -----------------------------------------------------------------------------
+# Lấy danh sách sản phẩm trong giỏ hàng live (logic DOM thuần, KHÔNG dùng AI)
+# -----------------------------------------------------------------------------
+
+# Script JS quét bảng sản phẩm. Thử nhiều nhóm selector theo thứ tự ưu tiên để
+# chịu được các phiên bản DOM khác nhau của TikTok Shop.
+_CDP_PRODUCTS_JS = r"""
+(() => {
+    const out = [];
+    const seen = new Set();
+
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+    // Uu tien nhom selector chat nhat -> long nhat
+    const GROUPS = [
+        ['.arco-table-tr', 'tr[data-row-key]', '[data-e2e*="product-row"]'],
+        ['tr', '[class*="ProductItem"]', '[class*="product-item"]'],
+        ['li[class*="product"]', '[class*="productCard"]', '[class*="card"]']
+    ];
+
+    const idFromAttrs = (el) => {
+        const attrs = [
+            'data-product-id', 'data-id', 'data-productid', 'product-id', 'data-row-key'
+        ];
+        for (const a of attrs) {
+            const v = el.getAttribute && el.getAttribute(a);
+            if (v && /^\d{6,}$/.test(String(v).trim())) return String(v).trim();
+        }
+        for (const a of ['data-e2e', 'data-testid', 'id', 'class']) {
+            const v = (el.getAttribute && el.getAttribute(a)) || '';
+            const m = String(v).match(/(?:product[_-]?id[_-]?)?(\d{10,20})/i);
+            if (m) return m[1];
+        }
+        return '';
+    };
+
+    const idFromLink = (el) => {
+        const a = el.querySelector && el.querySelector('a[href]');
+        if (!a) return { id: '', url: '' };
+        let href = a.getAttribute('href') || '';
+        if (!href) return { id: '', url: '' };
+        let abs = href;
+        try { abs = new URL(href, location.origin).href; } catch (e) { abs = href; }
+        let id = '';
+        const m = abs.match(/[?&](?:product_id|productId|id)=(\d{6,})/);
+        if (m) id = m[1];
+        if (!id) {
+            const m2 = abs.match(/\/(?:product|p)\/(\d{6,})/);
+            if (m2) id = m2[1];
+        }
+        return { id: id, url: abs };
+    };
+
+    const pickName = (row, text) => {
+        const sels = [
+            '[class*="title"]', '[class*="name"]', '[data-e2e*="title"]',
+            '[class*="ProductTitle"]', 'h3', 'h4', 'a[href]'
+        ];
+        for (const s of sels) {
+            const el = row.querySelector(s);
+            const v = norm(el && (el.innerText || el.textContent));
+            if (v && v.length >= 6 && !/^\d+$/.test(v)) return v;
+        }
+        const lines = text.split('\n').map(norm).filter(
+            (l) => l.length >= 6 && !/[₫$]/.test(l) && !/^\d[\d.,]*\s*(đ|k|vnd)?$/i.test(l)
+        );
+        return lines.length ? lines[0] : '';
+    };
+
+    const pickPrice = (row, text) => {
+        const el = row.querySelector('[class*="price"], [data-e2e*="price"]');
+        const v = norm(el && (el.innerText || el.textContent));
+        if (v && /\d/.test(v)) return v;
+        const m = text.match(/(\d[\d.,]*\s*(?:₫|đ|VND|k))/i);
+        return m ? m[1] : 'Ưu đãi trên live';
+    };
+
+    const pickPinned = (row, text) => {
+        if (/đang ghim|đang giới thiệu|đang phát/i.test(text)) return true;
+        const el = row.querySelector('[class*="pin"], [class*="Pinned"], [data-e2e*="pin"]');
+        if (el && /ghim|pin|giới thiệu/i.test(norm(el.innerText || el.textContent))) return true;
+        return false;
+    };
+
+    for (const group of GROUPS) {
+        let rows = [];
+        for (const s of group) {
+            try { rows = rows.concat(Array.from(document.querySelectorAll(s))); } catch (e) {}
+        }
+        if (!rows.length) continue;
+
+        for (const row of rows) {
+            if (row.querySelector && row.querySelector('th')) continue;
+            const cls = typeof row.className === 'string' ? row.className : '';
+            if (/header|thead/i.test(cls)) continue;
+
+            const text = norm(row.innerText || row.textContent);
+            if (!text || text.length < 4) continue;
+
+            const fromLink = idFromLink(row);
+            let pid = idFromAttrs(row) || fromLink.id;
+            if (!pid) {
+                // Fallback: tim day so dai trong text cua row (TikTok hien id san pham dang so dai)
+                const idInText = text.match(/\b(\d{10,20})\b/);
+                if (idInText) pid = idInText[1];
+            }
+            const name = pickName(row, row.innerText || '');
+            if (!name || name.length < 4) continue;
+
+            const key = pid || name;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const sttMatch = text.match(/(?:^|\s)#?(\d{1,2})(?:\s|[.:]|$)/);
+            // Neu khong co the <a href> nhung co id -> tao link san pham fallback
+            let link = fromLink.url || '';
+            if (!link && pid) link = 'https://shop.tiktok.com/view/product/' + pid;
+
+            out.push({
+                index: sttMatch ? parseInt(sttMatch[1], 10) : out.length + 1,
+                id: pid || '',
+                name: name,
+                price: pickPrice(row, text),
+                is_pinned: pickPinned(row, text),
+                url: link,
+                raw: text
+            });
+        }
+        if (out.length) break;   // nhom selector dau tien co ket qua -> dung
+    }
+
+    out.forEach((p, i) => { p.index = i + 1; });
+    return JSON.stringify(out);
+})()
+"""
+
+
+def _cdp_eval(ws, expr: str, req_id: int = 1, timeout_s: float = 20.0):
+    """Gửi Runtime.evaluate và trả về giá trị đã parse JSON (nếu là chuỗi JSON)."""
+    ws.send(json.dumps({
+        "id": req_id,
+        "method": "Runtime.evaluate",
+        "params": {"expression": expr, "returnByValue": True, "awaitPromise": True},
+    }))
+    deadline = time.monotonic() + max(1.0, timeout_s)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            resp = json.loads(ws.recv(timeout=remaining))
+        except Exception:
+            return None
+        if resp.get("id") != req_id:
+            continue
+        res = resp.get("result", {})
+        if res.get("exceptionDetails"):
+            return None
+        val = res.get("result", {}).get("value")
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return val
+        return val
+
+
+def _connect_cdp(cdp_port: int = 30899, timeout_s: float = 5.0):
+    """Mở kết nối websocket tới tab TikTok Shop. Trả (ws, None) hoặc (None, lý do)."""
     try:
         from websockets.sync.client import connect
     except ImportError:
-        return []
+        return None, "Thiếu thư viện websockets"
+    target = get_cdp_target(cdp_port=cdp_port)
+    if not target or not target.get("webSocketDebuggerUrl"):
+        return None, f"Không tìm thấy tab TikTok Shop trên cổng CDP {cdp_port}"
+    return connect(target["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2), None
 
-    script = """
-    (() => {
-        const products = [];
-        const rows = document.querySelectorAll(
-            '.arco-table-tr, [class*="product-item"], [class*="ProductItem"], [data-e2e*="product"], tr'
-        );
-        let idx = 1;
-        for (const row of rows) {
-            if (row.querySelector('th') || (row.className && typeof row.className === 'string' && row.className.includes('header'))) continue;
-            const text = (row.innerText || '').trim();
-            if (!text || text.length < 4) continue;
-            
-            const isPinned = text.includes('Đang ghim') || text.includes('Ghim') || text.includes('Pin') || text.includes('Đang giới thiệu');
-            const priceMatch = text.match(/(\\d[\\d.,]*\\s*(?:₫|đ|VND|k))/i);
-            const price = priceMatch ? priceMatch[1] : 'Ưu đãi trên live';
-            
-            const sttMatch = text.match(/(?:^|\\s)#?(\\d{1,2})(?:\\s|[.:]|$)/);
-            const itemIdx = sttMatch ? parseInt(sttMatch[1], 10) : idx;
-            
-            let name = '';
-            const titleEl = row.querySelector('[class*="title"], [class*="name"], [data-e2e*="title"], h3, h4, span, div');
-            if (titleEl && titleEl.innerText && titleEl.innerText.length >= 6) {
-                name = titleEl.innerText.trim();
-            } else {
-                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length >= 6 && !l.includes('₫') && !l.includes('đ'));
-                if (lines.length > 0) name = lines[0];
-            }
-            if (name && name.length >= 4) {
-                products.push({
-                    index: itemIdx,
-                    name: name,
-                    price: price,
-                    is_pinned: isPinned,
-                    raw: text
-                });
-                idx++;
-            }
-        }
-        return JSON.stringify(products);
-    })()
+
+def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
+    """Đọc danh sách sản phẩm trong giỏ hàng live trực tiếp từ DOM qua CDP.
+
+    Trả về list các dict: index, id, name, price, is_pinned, url, raw.
+    Không dùng AI - chỉ đọc DOM. Lỗi/không có browser -> trả [].
     """
+    ws, err = _connect_cdp(cdp_port=cdp_port)
+    if ws is None:
+        if err:
+            print(f"[browser] {err}")
+        return []
     try:
-        with connect(ws_url, open_timeout=5, close_timeout=2) as ws:
-            cmd = {
-                "id": 9999,
-                "method": "Runtime.evaluate",
-                "params": {"expression": script, "returnByValue": True},
-            }
-            ws.send(json.dumps(cmd))
-            resp = json.loads(ws.recv())
-            val = resp.get("result", {}).get("result", {}).get("value", "[]")
-            data = json.loads(val) if isinstance(val, str) else (val or [])
-            return data if isinstance(data, list) else []
+        with ws:
+            data = _cdp_eval(ws, _CDP_PRODUCTS_JS, req_id=9001, timeout_s=20.0)
+        return data if isinstance(data, list) else []
     except Exception as e:
         print(f"[browser] Lỗi fetch_live_products_cdp: {e}")
         return []
+
+
+# Script JS lấy chi tiết 1 trang sản phẩm: tên, mô tả, comment/đánh giá đầu tiên.
+_CDP_PRODUCT_DETAIL_JS = r"""
+(() => {
+    const out = { id: '', name: '', url: location.href, description: '', reviews: [] };
+    const norm = (s) => (s || '').replace(/\r/g, '').replace(/[ \t\u00a0]+/g, ' ').trim();
+    const oneLine = (s) => norm(s).replace(/\n+/g, ' ').trim();
+
+    out.url = location.href;
+    const pm = location.href.match(/[?&](?:product_id|productId|id)=(\d{6,})/) ||
+               location.href.match(/\/(?:product|p)\/(\d{6,})/);
+    if (pm) out.id = pm[1];
+
+    // Ten san pham
+    const nameSels = ['h1', '[class*="ProductTitle"]', '[class*="product-title"]',
+                      '[class*="title"]', 'h2'];
+    for (const s of nameSels) {
+        const el = document.querySelector(s);
+        const v = oneLine(el && (el.innerText || el.textContent));
+        if (v && v.length >= 6 && v.length <= 400) { out.name = v; break; }
+    }
+    if (!/^\d{6,}$/.test(out.id)) {
+        const el = document.querySelector('[data-product-id], [data-id]');
+        const v = el && (el.getAttribute('data-product-id') || el.getAttribute('data-id'));
+        if (v && /^\d{6,}$/.test(String(v))) out.id = String(v);
+    }
+
+    // Mo ta san pham
+    const descSels = ['[class*="ProductDescription"]', '[class*="product-description"]',
+                      '[class*="Description"]', '[class*="description"]',
+                      '[class*="detail"]', '[data-e2e*="description"]'];
+    let desc = '';
+    for (const s of descSels) {
+        for (const el of Array.from(document.querySelectorAll(s)).slice(0, 4)) {
+            const v = (el.innerText || el.textContent || '').trim();
+            if (v && v.length > desc.length) desc = v;
+        }
+        if (desc.length > 80) break;
+    }
+    if (!desc) {
+        // Fallback: ghep cac doan van ban dai trong body
+        const ps = Array.from(document.querySelectorAll('p, li'))
+            .map((p) => (p.innerText || '').trim())
+            .filter((t) => t.length >= 30);
+        desc = ps.slice(0, 12).join('\n');
+    }
+    out.description = norm(desc).slice(0, 4000);
+
+    // Comment / danh gia dau tien
+    const revSels = ['[class*="review-item"]', '[class*="ReviewItem"]', '[class*="review"]',
+                     '[class*="comment-item"]', '[class*="CommentItem"]', '[class*="comment"]',
+                     '[class*="rating"]', '[data-e2e*="review"]', '[data-e2e*="comment"]'];
+    const seenR = new Set();
+    const reviews = [];
+    for (const s of revSels) {
+        let els = [];
+        try { els = Array.from(document.querySelectorAll(s)); } catch (e) {}
+        for (const el of els) {
+            // Bo container lon: chi lay node la (khong chua node cung selector khac)
+            if (el.querySelector && el.querySelector(revSels.join(','))) continue;
+            let t = oneLine(el.innerText || el.textContent);
+            if (!t || t.length < 4 || t.length > 600) continue;
+            if (/^(đánh giá|review|bình luận|comment|xem thêm|viết đánh giá)$/i.test(t)) continue;
+            t = t.replace(/^\d+(\.\d+)?\s*★?\s*/, '').trim();
+            if (t.length < 4) continue;
+            const key = t.toLowerCase();
+            if (seenR.has(key)) continue;
+            seenR.add(key);
+            reviews.push(t);
+            if (reviews.length >= 60) break;
+        }
+        if (reviews.length) break;
+    }
+    out.reviews = reviews;
+    return JSON.stringify(out);
+})()
+"""
+
+
+def _slugify_product(name: str, fallback: str = "san-pham") -> str:
+    """Đổi tên sản phẩm thành slug tên file (bỏ dấu, chỉ giữ chữ/số/gạch)."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", str(name or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.replace("đ", "d").replace("Đ", "D")
+    s = re.sub(r"[^\w\s-]", "", s.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")[:60]
+    return s or fallback
+
+
+def _cdp_new_tab(url: str, cdp_port: int = 30899, timeout_s: float = 5.0) -> str:
+    """Mở tab mới trong trình duyệt qua HTTP endpoint CDP. Trả về targetId ("" nếu lỗi)."""
+    endpoint = f"http://127.0.0.1:{cdp_port}/json/new?{urllib.parse.quote(url, safe='')}"
+    try:
+        req = urllib.request.Request(endpoint, method="PUT",
+                                    headers={"User-Agent": "AutoVoiceTikTokShop/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return str(data.get("id") or "")
+    except Exception:
+        return ""
+
+
+def _cdp_close_tab(target_id: str, cdp_port: int = 30899, timeout_s: float = 5.0) -> None:
+    """Đóng tab theo targetId qua HTTP endpoint CDP."""
+    if not target_id:
+        return
+    endpoint = f"http://127.0.0.1:{cdp_port}/json/close/{urllib.parse.quote(target_id)}"
+    try:
+        req = urllib.request.Request(endpoint, headers={"User-Agent": "AutoVoiceTikTokShop/1.0"})
+        urllib.request.urlopen(req, timeout=timeout_s).close()
+    except Exception:
+        pass
+
+
+def _cdp_ws_for_target(target_id: str, cdp_port: int = 30899, timeout_s: float = 5.0):
+    """Mở websocket tới một target cụ thể (không đụng tab đang làm việc)."""
+    url = f"http://127.0.0.1:{cdp_port}/json"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "AutoVoiceTikTokShop/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            targets = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    for t in targets or []:
+        if str(t.get("id")) == str(target_id) and t.get("webSocketDebuggerUrl"):
+            try:
+                from websockets.sync.client import connect
+                return connect(t["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2)
+            except Exception:
+                return None
+    return None
+
+
+def crawl_product_detail_cdp(
+    url: str,
+    cdp_port: int = 30899,
+    max_reviews: int = 10,
+    timeout_s: float = 25.0,
+) -> dict:
+    """Mở link sản phẩm trong TAB RIÊNG rồi lấy tên, mô tả, comment/đánh giá đầu tiên.
+
+    Tab dashboard đang chạy live KHÔNG bị điều hướng; tab crawl được đóng sau khi xong.
+    Trả về dict: id, name, url, description, reviews (tối đa max_reviews phần tử).
+    Lỗi/timeout -> dict rỗng, không raise.
+    """
+    empty = {"id": "", "name": "", "url": url or "", "description": "", "reviews": []}
+    if not url:
+        return empty
+
+    try:
+        from websockets.sync.client import connect  # noqa: F401
+    except ImportError:
+        print("[browser] Thiếu thư viện websockets")
+        return empty
+
+    # 1. Mo tab rieng cho trang san pham
+    target_id = _cdp_new_tab(url, cdp_port=cdp_port)
+    if not target_id:
+        print(f"[browser] Không mở được tab sản phẩm: {url}")
+        return empty
+
+    data = None
+    try:
+        ws = _cdp_ws_for_target(target_id, cdp_port=cdp_port)
+        if ws is None:
+            return empty
+        with ws:
+            # 2. Cho trang load xong (readyState === 'complete')
+            deadline = time.monotonic() + max(3.0, float(timeout_s))
+            req = 0
+            while time.monotonic() < deadline:
+                req += 1
+                ws.send(json.dumps({
+                    "id": req + 9200,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": "document.readyState", "returnByValue": True},
+                }))
+                state = None
+                sub_deadline = time.monotonic() + 3.0
+                while time.monotonic() < sub_deadline:
+                    try:
+                        r = json.loads(ws.recv(timeout=max(0.2, sub_deadline - time.monotonic())))
+                    except Exception:
+                        break
+                    if r.get("id") == req + 9200:
+                        state = r.get("result", {}).get("result", {}).get("value")
+                        break
+                if state == "complete":
+                    break
+                time.sleep(1.0)
+            time.sleep(1.5)  # doi DOM render not (comment/description thuong load sau)
+
+            # 3. Lay du lieu
+            data = _cdp_eval(ws, _CDP_PRODUCT_DETAIL_JS, req_id=9300, timeout_s=timeout_s)
+
+        if not isinstance(data, dict):
+            return empty
+        reviews = data.get("reviews")
+        if not isinstance(reviews, list):
+            reviews = []
+        limit = max(0, int(max_reviews))
+        return {
+            "id": str(data.get("id") or ""),
+            "name": str(data.get("name") or ""),
+            "url": str(data.get("url") or url),
+            "description": str(data.get("description") or ""),
+            "reviews": [str(r) for r in reviews[:limit]],
+        }
+    except Exception as e:
+        print(f"[browser] Lỗi crawl_product_detail_cdp ({url}): {e}")
+        return empty
+    finally:
+        # 4. Dong tab crawl -> dashboard dang live khong bi anh huong
+        _cdp_close_tab(target_id, cdp_port=cdp_port)
+
+
+def _live_dir(live_dir: str | Path | None = None) -> Path:
+    """Thư mục context-live đã resolve (theo config nếu không truyền)."""
+    if live_dir:
+        target = Path(live_dir)
+        if target.is_absolute():
+            return target
+    else:
+        try:
+            import settings
+            return settings.resolve_path(settings.get().get("context_live_dir") or "context-live")
+        except Exception:
+            target = Path(os.getenv("CONTEXT_LIVE_DIR", "context-live"))
+    try:
+        import settings
+        return settings.resolve_path(target)
+    except Exception:
+        return Path(__file__).resolve().parent.parent / target
+
+
+def save_product_context(product: dict, live_dir: str | Path | None = None) -> Path | None:
+    """Ghi context 1 sản phẩm vào context-live, đè file cũ nếu trùng cả tên và id.
+
+    Dùng `_index.json` làm chỉ mục: khoá `<id>||<slug>`, giá trị tên file.
+    Id rỗng -> khoá chỉ dùng slug tên.
+    Trả về Path file đã ghi, hoặc None nếu lỗi.
+    """
+    if not isinstance(product, dict):
+        return None
+
+    name = str(product.get("name") or "").strip()
+    pid = str(product.get("id") or "").strip()
+    if not name and not pid:
+        return None
+
+    target_dir = _live_dir(live_dir)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[browser] Không tạo được thư mục {target_dir}: {e}")
+        return None
+
+    index_path = target_dir / "_index.json"
+    index: dict = {}
+    if index_path.is_file():
+        try:
+            raw = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                index = {str(k): str(v) for k, v in raw.items()}
+        except Exception:
+            index = {}
+
+    slug = _slugify_product(name, fallback=f"san-pham-{pid or 'live'}")
+    key = f"{pid}||{slug}" if pid else slug
+
+    # Tên file dựa trên TÊN sản phẩm (không dùng tiền tố thứ tự giỏ hàng).
+    used_names = {v for k, v in index.items() if k != key}
+
+    existing = index.get(key)
+    if existing and (target_dir / existing).is_file():
+        file_path = target_dir / existing          # ĐÈ LÊN file cũ, không tạo mới
+    else:
+        candidate = f"{slug}.md"
+        # Trùng tên nhưng KHÁC id -> thêm hậu tố id để không ghi đè file của sản phẩm kia
+        if candidate in used_names or (target_dir / candidate).is_file():
+            candidate = f"{slug}-{pid}.md" if pid else f"{slug}-{abs(hash(key)) % 100000}.md"
+        file_path = target_dir / candidate
+        index[key] = file_path.name
+
+    price = str(product.get("price") or "Ưu đãi trên live").strip()
+    url = str(product.get("url") or "").strip()
+    desc = str(product.get("description") or "").strip()
+    reviews = product.get("reviews") or []
+    if not isinstance(reviews, list):
+        reviews = []
+
+    lines = [
+        f"# {name or pid}",
+        "",
+        f"- Mã sản phẩm (id): {pid or 'không xác định'}",
+        f"- Thứ tự trong giỏ hàng live: {product.get('index', '-')}",
+        f"- Giá ưu đãi: {price}",
+    ]
+    if url:
+        lines.append(f"- Link sản phẩm: {url}")
+    lines += ["", "## Mô tả sản phẩm", "", desc or "(Chưa lấy được mô tả.)", ""]
+    lines += ["## Đánh giá / bình luận của khách", ""]
+    if reviews:
+        lines += [f"{i}. {r}" for i, r in enumerate(reviews, 1)]
+    else:
+        lines.append("(Sản phẩm chưa có đánh giá/bình luận nào.)")
+    lines += [
+        "",
+        "## Hướng dẫn tư vấn bán hàng",
+        "",
+        f"- Khách hỏi '{name or pid}' (hoặc mã {product.get('index', '-')}) thì tư vấn theo đúng thông tin trên.",
+        "- Dựa vào mô tả và đánh giá thật ở trên để trả lời, không bịa thông tin ngoài file này.",
+        f"- Nhấn mạnh giá ưu đãi {price} chỉ có trên phiên live.",
+        "- Nhắc khách bấm giỏ hàng góc trái màn hình để chốt đơn.",
+        "",
+    ]
+    content = "\n".join(lines)
+
+    try:
+        file_path.write_text(content, encoding="utf-8")
+        index_path.write_text(
+            json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"[browser] Lỗi ghi context sản phẩm {file_path}: {e}")
+        return None
+
+    try:
+        import event_analyzer
+        event_analyzer.reload_intent()
+    except Exception:
+        pass
+    return file_path
 
 
 def save_live_products_to_context_live(products: list[dict], live_dir: str | Path | None = None) -> list[Path]:

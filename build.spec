@@ -56,6 +56,8 @@ hiddenimports = [
     "tts_client",
     "browser_manager",
     "batch_processor",
+    "json_utils",
+    "intent_router",
 ]
 
 excludes = [

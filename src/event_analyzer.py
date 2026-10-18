@@ -195,6 +195,8 @@ _PHONETIC_DICT = [
     (re.compile(r"\bdeal\b", re.I), "điu"),
     (re.compile(r"\border\b", re.I), "chốt đơn"),
     (re.compile(r"\bsize\b", re.I), "sai"),
+    # "shop"/"sop" phải đọc thành "sóp" (prompt đã yêu cầu, nhưng LLM hay trả về "shop")
+    (re.compile(r"\b(shops|shop|sop|sóp)\b", re.I), "sóp"),
 ]
 
 
@@ -306,6 +308,8 @@ class ChatIntent:
             if not target_dir.is_dir():
                 continue
             for md in sorted(target_dir.glob("*.md")):
+                if md.name.lower() in ("readme.md", "_index.md"):
+                    continue
                 try:
                     text = md.read_text(encoding="utf-8")
                 except Exception:
@@ -337,7 +341,11 @@ class ChatIntent:
                 price = ""
                 for line in text.splitlines():
                     line = line.strip()
-                    if line.startswith("Giá:") or line.startswith("- Giá:"):
+                    if (
+                        line.startswith("Giá:")
+                        or line.startswith("- Giá:")
+                        or line.startswith("- Giá ưu đãi:")
+                    ):
                         price = line.split(":", 1)[1].strip()
                         break
                 # Trích xuất số thứ tự giỏ hàng (index) nếu có
@@ -349,6 +357,9 @@ class ChatIntent:
                     except Exception:
                         p_idx = None
 
+                # Tách mô tả / đánh giá / id / link từ file context để gửi kèm cho LLM
+                description, reviews, pid, url = self._split_context_sections(text)
+
                 self.products.append({
                     "name": name,
                     "keywords": keywords,
@@ -356,9 +367,53 @@ class ChatIntent:
                     "price": price,
                     "index": p_idx,
                     "ctx": text,
+                    "description": description,
+                    "reviews": reviews,
+                    "id": pid,
+                    "url": url,
                     "file": md.name,
                     "live": bool(self.live_dir and target_dir == self.live_dir),
                 })
+
+    @staticmethod
+    def _split_context_sections(text: str) -> tuple[str, list[str], str, str]:
+        """Tách file context sản phẩm thành (mô tả, danh sách đánh giá, id, link)."""
+        description_lines: list[str] = []
+        reviews: list[str] = []
+        pid = ""
+        url = ""
+        section = ""
+        for raw_line in str(text or "").splitlines():
+            line = raw_line.strip()
+            low = line.lower()
+            if line.startswith("#"):
+                heading = low.lstrip("#").strip()
+                if "mô tả" in heading or "mo ta" in heading:
+                    section = "desc"
+                elif "đánh giá" in heading or "danh gia" in heading or "bình luận" in heading:
+                    section = "review"
+                else:
+                    section = "other"
+                continue
+            if low.startswith("- mã sản phẩm") or low.startswith("- ma san pham"):
+                pid = line.split(":", 1)[1].strip() if ":" in line else ""
+                if "không xác định" in pid.lower() or "khong xac dinh" in pid.lower():
+                    pid = ""
+                continue
+            if low.startswith("- link sản phẩm") or low.startswith("- link san pham"):
+                url = line.split(":", 1)[1].strip() if ":" in line else ""
+                continue
+            if section == "desc" and line:
+                description_lines.append(line)
+            elif section == "review" and line:
+                m = re.match(r"^\d+[.)]\s*(.+)$", line)
+                reviews.append(m.group(1).strip() if m else line)
+        description = "\n".join(description_lines).strip()
+        if description.startswith("(Chưa lấy được") or description.startswith("(Chua lay duoc"):
+            description = ""
+        reviews = [r for r in reviews if r and not r.startswith("(Sản phẩm chưa có")]
+        return description, reviews, pid, url
+
     def match(self, text: str) -> dict | None:
         tl = (text or "").lower()
         q_raw_tokens = [t.lower() for t in re.findall(r"\w+", tl, flags=re.UNICODE)]
@@ -410,8 +465,18 @@ class ChatIntent:
                 except Exception:
                     import llm_client as _llm  # type: ignore
             raw_reply = _llm.chat(system, user_prompt)
-            reply = phoneticize_vietnamese(clean_speak_text(raw_reply, max_words=_MAX_WORDS))
-            return reply or None
+            # Prompt yêu cầu only-JSON -> đọc speak_text từ JSON trước khi chuẩn hoá
+            try:
+                import intent_router as _ir
+                speak = _ir.parse_speak_reply(raw_reply, fallback_kind="sales").get("speak_text") or ""
+            except Exception:
+                speak = str(raw_reply or "")
+            speak = strip_agent_meta(speak)
+            reply = phoneticize_vietnamese(clean_speak_text(speak, max_words=_MAX_WORDS))
+            if reply:
+                return reply
+            # LLM trả rỗng / JSON không có speak_text -> rơi xuống câu trả lời dựng sẵn
+            raise ValueError("LLM trả về nội dung rỗng")
         except Exception:
             price_val = prod.get('price', '')
             if price_val:
@@ -553,6 +618,144 @@ def get_batcher() -> GreetingBatcher:
     return _batcher
 
 
+def generate_by_intent(
+    user: str,
+    text: str,
+    intent: str,
+    product: dict | None = None,
+    context_note: str = "",
+) -> str:
+    """Gọi LLM sinh câu thoại theo ĐÚNG loại prompt ứng với ý định.
+
+    Luồng: phân loại ý định (intent_router, dùng model AI cấu hình `analyst_llm_model`)
+    -> chọn prompt tương ứng trong prompts/*.md -> ép LLM trả ONLY JSON
+    -> đọc JSON bằng json_utils (chịu được JSON lỗi) -> chuẩn hoá câu thoại.
+
+    Luôn trả về câu thoại tiếng Việt (dự phòng bằng luật khi LLM lỗi).
+    """
+    try:
+        import intent_router
+    except ImportError:
+        intent_router = None  # type: ignore[assignment]
+
+    u = user if user and user not in ("Khách", "bạn mới") else "bạn"
+    intent = (intent or "chat").strip().lower()
+
+    # Câu chào hỏi rất ngắn vẫn gọi LLM với system_greeting.md; các mẫu cứng chỉ dùng
+    # làm dự phòng khi LLM lỗi (xem _greeting_fallback bên dưới).
+
+    # 1. Chọn prompt theo đúng loại ý định
+    prompt_name = intent_router.prompt_for_intent(intent) if intent_router else "system_chat"
+    priority = {"order": 1, "gift": 1, "product_question": 2, "chat": 2}.get(intent, 3)
+    base_prompt = get_prompt(prompt_name)
+    system = (
+        intent_router.build_speak_prompt(base_prompt, intent, priority)
+        if intent_router
+        else base_prompt
+    )
+    if "{user}" in system or "{u}" in system:
+        system = system.replace("{user}", u).replace("{u}", u)
+
+    # 3. Dựng ngữ cảnh gửi kèm (sản phẩm khách đang hỏi + ghi chú)
+    ctx_parts = []
+    if product:
+        ctx_parts.append("NGỮ CẢNH SẢN PHẨM KHÁCH ĐANG HỎI:")
+        ctx_parts.append(f"- Tên: {product.get('name', '')}")
+        if product.get("price"):
+            ctx_parts.append(f"- Giá ưu đãi: {product.get('price')}")
+        if product.get("index") is not None:
+            ctx_parts.append(f"- Thứ tự trong giỏ hàng: số {product.get('index')}")
+        if product.get("url"):
+            ctx_parts.append(f"- Link: {product.get('url')}")
+        desc = (product.get("description") or "").strip()
+        if not desc:
+            # File context-data cũ không có section mô tả -> dùng toàn bộ nội dung file
+            desc = (product.get("ctx") or "").strip()
+        if desc:
+            ctx_parts.append(f"- Mô tả: {desc[:1500]}")
+        revs = product.get("reviews") or []
+        if not revs and not product.get("description"):
+            # Suy ra đánh giá từ phần cuối nội dung thô nếu có
+            revs = []
+        if isinstance(revs, list) and revs:
+            ctx_parts.append("- Đánh giá của khách trước đó: " + " | ".join(str(r) for r in revs[:5]))
+        ctx_parts.append(f"- Nguồn dữ liệu: {'context-live' if product.get('live') else 'context-data'}")
+    if context_note:
+        ctx_parts.append(context_note)
+    ctx_parts.append(f'Khách "{u}" vừa bình luận: "{text}"')
+
+    user_prompt = "\n".join(ctx_parts)
+
+    # 4. Gọi LLM, đọc JSON chịu lỗi
+    try:
+        import llm_client
+
+        reply = llm_client.chat(system, user_prompt)
+        if intent_router:
+            data = intent_router.parse_speak_reply(reply, fallback_kind=intent)
+            speak = data.get("speak_text") or ""
+        else:
+            speak = str(reply or "")
+    except Exception:
+        speak = ""
+
+    speak = strip_agent_meta(speak)
+    if not speak:
+        if intent == "greeting":
+            return _greeting_fallback(u)
+        return answer_general_chat(user, text)
+    return phoneticize_vietnamese(clean_speak_text(speak, max_words=_MAX_WORDS))
+
+
+def _greeting_fallback(user: str) -> str:
+    """Câu chào dự phòng khi LLM lỗi/không trả về nội dung."""
+    templates = [
+        f"Chào {user}, sóp đây! Bạn đang ngắm món ăn vặt nào thế nè?",
+        f"Dạ sóp chào {user}, sóp nghe đây ạ! Bạn bấm giỏ hàng góc trái xem món ngon nhé!",
+        f"Chào {user}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
+        f"Chào {user}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
+    ]
+    return phoneticize_vietnamese(random.choice(templates))
+
+
+def answer_by_intent(user: str, text: str, products: list[dict] | None = None) -> dict:
+    """Phân loại ý định rồi sinh câu thoại phù hợp.
+
+    Trả về {"intent", "source", "prompt", "speak_text", "product"}.
+    Sản phẩm tra trong context-live trước, fallback context-data (ChatIntent đã gộp cả hai).
+    """
+    try:
+        import intent_router
+    except ImportError:
+        intent_router = None  # type: ignore[assignment]
+
+    if intent_router is None:
+        return {
+            "intent": "chat", "source": "rule", "prompt": "system_chat",
+            "speak_text": answer_general_chat(user, text), "product": None,
+        }
+
+    prods = products if products is not None else _get_intent().products
+    cls = intent_router.classify_intent(text, products=prods)
+    intent = cls.get("intent") or "chat"
+
+    product = None
+    if intent == "product_question":
+        hint = (cls.get("product_hint") or "").strip() or text
+        product = _get_intent().match(hint)
+        if product is None:
+            product = _get_intent().match(text)
+
+    speak = generate_by_intent(user, text, intent, product=product)
+    return {
+        "intent": intent,
+        "source": cls.get("source", "rule"),
+        "prompt": intent_router.prompt_for_intent(intent),
+        "speak_text": speak,
+        "product": product,
+    }
+
+
 def answer_general_chat(user: str, text: str) -> str:
     """Tự động đáp lại các câu chào hỏi, gọi shop hoặc giao tiếp ngoài lề của người xem live."""
     s = (text or "").lower().strip()
@@ -588,7 +791,14 @@ def answer_general_chat(user: str, text: str) -> str:
             except Exception:
                 import llm_client as _llm  # type: ignore
         raw = _llm.chat(system, user_prompt)
-        reply = clean_speak_text(raw, max_words=30)
+        # Prompt yêu cầu only-JSON -> đọc speak_text trong JSON
+        try:
+            import intent_router as _ir
+            speak = _ir.parse_speak_reply(raw, fallback_kind="chat").get("speak_text") or ""
+        except Exception:
+            speak = str(raw or "")
+        speak = strip_agent_meta(speak)
+        reply = clean_speak_text(speak, max_words=_MAX_WORDS)
         if reply:
             return phoneticize_vietnamese(reply)
     except Exception:
@@ -613,11 +823,21 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
 
     if typ in ("chat", "comment", "message"):
         text = str(ev.get("text") or ev.get("message") or ev.get("content") or "").strip()
-        ans = _get_intent().answer(text)
-        if ans is not None:
-            return {"kind": "sales", "priority": 2, "speak_text": ans}
-        speak = answer_general_chat(user, text)
-        return {"kind": "chat", "priority": 2, "speak_text": speak}
+        res = answer_by_intent(user, text)
+        intent = res["intent"]
+        kind = "sales" if intent == "product_question" else ("greeting" if intent == "greeting" else "chat")
+        # Bình luận của khách luôn là ưu tiên vừa (2); riêng chốt đơn/quà tặng lên 1.
+        # (Chào hỏi hạ xuống 3 chỉ áp dụng cho sự kiện join, không phải bình luận.)
+        priority = 1 if intent in ("order", "gift") else 2
+        return {
+            "kind": kind,
+            "priority": priority,
+            "speak_text": res["speak_text"],
+            "intent": intent,
+            "intent_source": res["source"],
+            "prompt": res["prompt"],
+            "product": (res["product"] or {}).get("name"),
+        }
 
     if typ == "gift":
         gift = ev.get("gift") or ev.get("gift_name") or "quà"
@@ -643,14 +863,33 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             if m_v:
                 product = m_v.group(1).strip()
         
+        # Đối chiếu context-live trước, fallback context-data (ChatIntent gộp cả hai)
         matched = _get_intent().match(product) if product else None
         p_display = matched["name"] if matched else (product or "sản phẩm trên live")
-        price_str = f", giá ưu đãi chỉ {phoneticize_vietnamese(matched['price'])}" if matched and matched.get("price") else ""
-        
-        reply = phoneticize_vietnamese(
-            f"Dạ sóp chào {user}, mình đang xem {p_display}{price_str} đúng không ạ? Sản phẩm này đang bán rất chạy, bạn bấm vào giỏ hàng chốt đơn kẻo hết nhé!"
+
+        # Sinh câu thoại bằng LLM với đúng prompt tư vấn sản phẩm
+        reply = generate_by_intent(
+            user,
+            f"Khách đang xem sản phẩm: {p_display}"
+            + (f' (khách viết: "{raw_text}")' if raw_text else ""),
+            "product_question",
+            product=matched,
         )
-        return {"kind": "viewing_product", "priority": 1, "speak_text": reply}
+        if not reply:
+            price_str = (
+                f", giá ưu đãi chỉ {phoneticize_vietnamese(matched['price'])}"
+                if matched and matched.get("price") else ""
+            )
+            reply = phoneticize_vietnamese(
+                f"Dạ sóp chào {user}, mình đang xem {p_display}{price_str} đúng không ạ? "
+                f"Sản phẩm này đang bán rất chạy, bạn bấm vào giỏ hàng chốt đơn kẻo hết nhé!"
+            )
+        return {
+            "kind": "viewing_product",
+            "priority": 1,
+            "speak_text": reply,
+            "product": p_display,
+        }
     if typ == "order":
         product = ev.get("product") or ev.get("product_name") or ev.get("item")
         raw_text = str(ev.get("text") or ev.get("raw") or ev.get("content") or "").strip()

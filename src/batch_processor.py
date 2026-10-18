@@ -81,30 +81,38 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
     if not raw_text:
         return []
 
-    cleaned = raw_text.strip()
-    # Loại bỏ markdown code block nếu có
-    if "```" in cleaned:
-        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, flags=re.I)
-        if m:
-            cleaned = m.group(1).strip()
-
-    # Tìm mảng JSON [ ... ]
-    m_arr = re.search(r"\[\s*\{[\s\S]*\}\s*\]", cleaned)
-    if m_arr:
-        cleaned = m_arr.group(0)
-
+    # Dùng json_utils để chịu được mọi kiểu JSON lỗi của LLM
+    # (code fence, nháy đơn, key/giá trị không nháy, dấu phẩy thừa, xuống dòng trong chuỗi...).
     try:
-        data = json.loads(cleaned)
-    except Exception:
-        # Fallback thử sửa các lỗi JSON thường gặp (ví dụ dấu phẩy thừa ở cuối)
-        fixed = re.sub(r",\s*([\]\}])", r"\1", cleaned)
-        try:
-            data = json.loads(fixed)
-        except Exception:
-            return []
+        import json_utils
+    except ImportError:
+        json_utils = None  # type: ignore[assignment]
 
-    if not isinstance(data, list):
-        return []
+    if json_utils is not None:
+        data = json_utils.parse_json_loose(raw_text, default=None)
+        if isinstance(data, dict):
+            data = json_utils.as_list(data)
+        if not isinstance(data, list):
+            return []
+    else:
+        cleaned = raw_text.strip()
+        if "```" in cleaned:
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, flags=re.I)
+            if m:
+                cleaned = m.group(1).strip()
+        m_arr = re.search(r"\[\s*\{[\s\S]*\}\s*\]", cleaned)
+        if m_arr:
+            cleaned = m_arr.group(0)
+        try:
+            data = json.loads(cleaned)
+        except Exception:
+            fixed = re.sub(r",\s*([\]\}])", r"\1", cleaned)
+            try:
+                data = json.loads(fixed)
+            except Exception:
+                return []
+        if not isinstance(data, list):
+            return []
 
     valid_items: list[dict] = []
     for item in data:

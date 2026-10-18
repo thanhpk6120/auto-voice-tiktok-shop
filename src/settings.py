@@ -33,6 +33,10 @@ DEFAULTS: dict = {
     "llm_api_key": "",
     "llm_model": "claude-sonnet-5",
     "llm_timeout_s": 20,
+    # Model AI chuyên phân tích bình luận/hoạt động để chọn đúng loại prompt.
+    # Để trống "" = tắt phân tích bằng AI, dùng luật từ khoá dự phòng.
+    "analyst_llm_model": "openrouter/typesafe/jev-router",
+    "analyst_llm_timeout_s": 12,
     # VoiceStudio TTS
     "voicestudio_url": "http://127.0.0.1:3900",
     "voicestudio_voice": "alloy",
@@ -70,7 +74,14 @@ DEFAULTS: dict = {
 
 # Cac key duoc phep sua qua GUI. Nhom lai de GUI render theo section.
 SECTIONS: dict = {
-    "LLM": ["llm_base_url", "llm_api_key", "llm_model", "llm_timeout_s"],
+    "LLM": [
+        "llm_base_url",
+        "llm_api_key",
+        "llm_model",
+        "llm_timeout_s",
+        "analyst_llm_model",
+        "analyst_llm_timeout_s",
+    ],
     "VoiceStudio TTS": [
         "voicestudio_url",
         "voicestudio_voice",
@@ -122,38 +133,40 @@ FIELD_OPTIONS: dict[str, list[str]] = {
 
 # Giai thich chi tiet / chu thich tooltip cho tung bien cau hinh
 FIELD_DOCS: dict[str, str] = {
-    "llm_base_url": "Dia chi API LLM tuong thich chuan OpenAI (vd: http://192.168.1.68:20130/v1 hoac http://localhost:11434/v1).",
-    "llm_api_key": "API Key de xac thuc voi server LLM (neu server local khong can key thi de trong).",
-    "llm_model": "Ten model LLM sinh loi thoai (vd: claude-sonnet-5, gpt-4o-mini, qwen2.5-7b).",
-    "llm_timeout_s": "Thoi gian cho toi da (giay) cho moi yeu cau goi LLM truoc khi tu dong fallback.",
-    "voicestudio_url": "Dia chi VoiceStudio Local API (mac dinh: http://127.0.0.1:3900).",
-    "voicestudio_voice": "Ten giong doc: alloy, echo, fable, onyx, nova, shimmer hoac ten giong ban da clone trong VoiceStudio.",
-    "voicestudio_model": "Model TTS trong VoiceStudio (tts-1 toc do nhanh hoac tts-1-hd chat luong cao).",
-    "tts_timeout_s": "Thoi gian cho toi da (giay) cho qua trinh tao file am thanh tu text.",
-    "bridge_url": "Dia chi WebSocket bridge nhan su kien tu Chrome Extension (ws://127.0.0.1:8765/ws?role=app).",
-    "bridge_port": "Cong mang port de khoi chay WebSocket server tiep nhan event tu extension.",
-    "prompts_dir": "Thu muc chua cac file prompt .md (system_sales.md, system_chat.md, system_batch.md).",
-    "context_dir": "Thu muc chua cac file thong tin san pham mau .md de AI hoc va tu van ban hang.",
-    "context_live_dir": "Thu muc tu dong luu thong tin cac san pham duoc quet truc tiep tu gio hang live tren TikTok.",
-    "batch_window_s": "Thoi gian cua so gom su kien (giay, mac dinh 5.0s). Su kien uu tien cao se duoc tao voice ngay.",
-    "batch_max_events": "So luong su kien toi da duoc xu ly trong 1 batch de tranh qua tai bo nho.",
-    "audio_device": "Thiet bi am thanh dau ra de phat voice (Loa may tinh hoac CABLE Input de dua vao OBS).",
-    "no_play": "Che do chay thu nghiem: sinh text va audio day du nhung khong phat ra loa.",
-    "interrupt_mode": "Chinh sach ngat: 'finish' (doc tron ven cau hien tai roi moi doc cau tiep); 'interrupt' (ngat ngay khi co don hang/qua).",
-    "sales_max_words": "Do dai toi da cua cau tu van san pham (50-100 tu) giup cau tra loi day du thong tin chi tiet.",
-    "remind_enabled": "Bat/Tat tinh nang doc dinh ky cau nhac nguoi xem tha tim va binh luan.",
-    "remind_min_s": "Thoi gian ngau nhien toi thieu (giay) giua 2 lan doc cau nhac tuong tac.",
-    "remind_max_s": "Thoi gian ngau nhien toi da (giay) giua 2 lan doc cau nhac tuong tac.",
-    "remind_text": "Noi dung cau thoai nhac nho khan gia tha tim va tuong tac tren live.",
-    "out_dir": "Thu muc luu tru cac file am thanh .wav duoc tao ra.",
-    "greeting_cooldown_s": "Thoi gian cooldown (giay) giua cac lan chao hoi nguoi xem moi vao phong.",
-    "greeting_max_batch": "So nguoi vao phong toi da duoc gom chung trong 1 cau chao.",
-    "gologin_dir": "Duong dan thu muc chua phan mem GoLogin offline tren may.",
-    "gologin_profiles_dir": "Duong dan thu muc luu cac profile trinh duyet GoLogin.",
-    "gologin_active_version": "Phien ban Chrome/Orbita dang duoc chon de khoi chay trinh duyet.",
-    "gologin_profile_id": "ID profile GoLogin duoc chon de tu dong dang nhap TikTok Shop live.",
-    "browser_mode": "Che do trinh duyet: 'gologin_cdp' (truc tiep qua CDP debug) hoac 'extension' (qua Chrome Extension).",
-    "log_level": "Muc do chi tiet ghi log cua he thong: INFO, DEBUG, WARNING, ERROR.",
+    "llm_base_url": "Địa chỉ API LLM tương thích chuẩn OpenAI (ví dụ: http://192.168.1.68:20130/v1 hoặc http://localhost:11434/v1).",
+    "llm_api_key": "API Key để xác thực với server LLM (nếu server local không cần key thì để trống).",
+    "llm_model": "Tên model LLM sinh lời thoại (ví dụ: claude-sonnet-5, gpt-4o-mini, qwen2.5-7b).",
+    "llm_timeout_s": "Thời gian chờ tối đa (giây) cho mỗi yêu cầu gọi LLM trước khi tự động fallback.",
+    "analyst_llm_model": "Model AI chuyên PHÂN TÍCH bình luận/hoạt động để biết khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, từ đó chọn đúng loại prompt. Ví dụ: openrouter/typesafe/jev-router. Bấm nút 'Tải danh sách model' ở tab Quản lý Prompt để chọn từ danh sách thật của server. Để trống để tắt phân tích bằng AI và dùng luật từ khoá dự phòng.",
+    "analyst_llm_timeout_s": "Thời gian chờ tối đa (giây) cho bước phân tích ý định. Nếu quá hạn sẽ tự động dùng luật từ khoá dự phòng.",
+    "voicestudio_url": "Địa chỉ VoiceStudio Local API (mặc định: http://127.0.0.1:3900).",
+    "voicestudio_voice": "Tên giọng đọc: alloy, echo, fable, onyx, nova, shimmer hoặc tên giọng bạn đã clone trong VoiceStudio.",
+    "voicestudio_model": "Model TTS trong VoiceStudio (tts-1 tốc độ nhanh hoặc tts-1-hd chất lượng cao).",
+    "tts_timeout_s": "Thời gian chờ tối đa (giây) cho quá trình tạo file âm thanh từ text.",
+    "bridge_url": "Địa chỉ WebSocket bridge nhận sự kiện từ Chrome Extension (ws://127.0.0.1:8765/ws?role=app).",
+    "bridge_port": "Cổng mạng để khởi chạy WebSocket server tiếp nhận event từ extension.",
+    "prompts_dir": "Thư mục chứa các file prompt .md (system_greeting.md, system_sales.md, system_order.md, system_gift.md, system_chat.md, system_batch.md, system_analyzer.md). Sửa được ngay trong tab Quản lý Prompt.",
+    "context_dir": "Thư mục chứa các file thông tin sản phẩm mẫu .md để AI học và tư vấn bán hàng.",
+    "context_live_dir": "Thư mục lưu context sản phẩm lấy trực tiếp từ trình duyệt (tên, mô tả, 10 đánh giá đầu tiên) qua nút 'Load context-live'.",
+    "batch_window_s": "Thời gian cửa sổ gom sự kiện (giây, mặc định 5.0s). Sự kiện ưu tiên cao sẽ được tạo voice ngay.",
+    "batch_max_events": "Số lượng sự kiện tối đa được xử lý trong 1 batch để tránh quá tải bộ nhớ.",
+    "audio_device": "Thiết bị âm thanh đầu ra để phát voice (Loa máy tính hoặc CABLE Input để đưa vào OBS).",
+    "no_play": "Chế độ chạy thử nghiệm: sinh text và audio đầy đủ nhưng không phát ra loa.",
+    "interrupt_mode": "Chính sách ngắt: 'finish' (đọc trọn vẹn câu hiện tại rồi mới đọc câu tiếp); 'interrupt' (ngắt ngay khi có đơn hàng/quà).",
+    "sales_max_words": "Độ dài tối đa của câu tư vấn sản phẩm (50-100 từ) giúp câu trả lời đầy đủ thông tin chi tiết.",
+    "remind_enabled": "Bật/Tắt tính năng đọc định kỳ câu nhắc người xem thả tim và bình luận.",
+    "remind_min_s": "Thời gian ngẫu nhiên tối thiểu (giây) giữa 2 lần đọc câu nhắc tương tác.",
+    "remind_max_s": "Thời gian ngẫu nhiên tối đa (giây) giữa 2 lần đọc câu nhắc tương tác.",
+    "remind_text": "Nội dung câu thoại nhắc nhở khán giả thả tim và tương tác trên live.",
+    "out_dir": "Thư mục lưu trữ các file âm thanh .wav được tạo ra.",
+    "greeting_cooldown_s": "Thời gian cooldown (giây) giữa các lần chào hỏi người xem mới vào phòng.",
+    "greeting_max_batch": "Số người vào phòng tối đa được gom chung trong 1 câu chào.",
+    "gologin_dir": "Đường dẫn thư mục chứa phần mềm GoLogin offline trên máy.",
+    "gologin_profiles_dir": "Đường dẫn thư mục lưu các profile trình duyệt GoLogin.",
+    "gologin_active_version": "Phiên bản Chrome/Orbita đang được chọn để khởi chạy trình duyệt.",
+    "gologin_profile_id": "ID profile GoLogin được chọn để tự động đăng nhập TikTok Shop live.",
+    "browser_mode": "Chế độ trình duyệt: 'gologin_cdp' (trực tiếp qua CDP debug) hoặc 'extension' (qua Chrome Extension).",
+    "log_level": "Mức độ chi tiết ghi log của hệ thống: INFO, DEBUG, WARNING, ERROR.",
 }
 
 
@@ -243,7 +256,7 @@ def load(use_cache: bool = False) -> dict:
             if isinstance(data, dict):
                 cfg.update({k: v for k, v in data.items() if v is not None})
         except Exception as e:  # file hong / khong doc duoc -> dung defaults
-            print(f"[settings] khong doc duoc {path}: {e}", file=sys.stderr)
+            print(f"[settings] không đọc được {path}: {e}", file=sys.stderr)
 
     _cache = dict(cfg)
     return dict(cfg)
@@ -322,6 +335,8 @@ def apply(cfg: dict | None = None) -> dict:
             _mod.LLM_MODEL = str(cfg["llm_model"])
             _mod.LLM_API_KEY = str(cfg["llm_api_key"])
             _mod.LLM_TIMEOUT_S = float(cfg["llm_timeout_s"])
+            _mod.ANALYST_LLM_MODEL = str(cfg.get("analyst_llm_model", ""))
+            _mod.ANALYST_LLM_TIMEOUT_S = float(cfg.get("analyst_llm_timeout_s", 12))
             _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))
             _mod.CONTEXT_DIR = str(cfg.get("context_dir", "context-data"))
             _mod.CONTEXT_LIVE_DIR = str(cfg.get("context_live_dir", "context-live"))
@@ -384,5 +399,5 @@ def masked(cfg: dict | None = None) -> dict:
 if __name__ == "__main__":  # chan doan nhanh: python src/settings.py
     _p = config_path()
     print(f"config_path = {_p}")
-    print(f"ton tai      = {_p.is_file()}")
+    print(f"tồn tại      = {_p.is_file()}")
     print(json.dumps(masked(), ensure_ascii=False, indent=2))

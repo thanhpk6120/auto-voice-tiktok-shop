@@ -706,21 +706,21 @@ def iter_events(url: str = DEFAULT_BRIDGE_URL, stop_event: threading.Event | Non
 def main() -> int:
     parser = argparse.ArgumentParser(description="Event bridge (TikTok extension -> app)")
     sub = parser.add_subparsers(dest="command")
-    p = sub.add_parser("serve", help="Chay bridge WebSocket")
+    p = sub.add_parser("serve", help="Chạy bridge WebSocket")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
-    p.add_argument("--sim", action="store_true", help="Tu sinh event gia lap (khong can extension)")
-    p.add_argument("--speed", type=float, default=1.0, help="He so toc do cho --sim")
-    sub.add_parser("health", help="Kiem tra bridge co song khong")
+    p.add_argument("--sim", action="store_true", help="Tự sinh event giả lập (không cần extension)")
+    p.add_argument("--speed", type=float, default=1.0, help="Hệ số tốc độ cho --sim")
+    sub.add_parser("health", help="Kiểm tra bridge có sống không")
     args = parser.parse_args()
 
     if args.command == "health":
         try:
             for _ in iter_events(open_timeout=3.0, recv_timeout=0.5):
-                print("[BRIDGE] OK (nhan duoc event)")
+                print("[BRIDGE] OK (nhận được event)")
                 return 0
         except Exception as e:
-            print(f"[BRIDGE] FAIL {e}", file=sys.stderr)
+            print(f"[BRIDGE] LỖI {e}", file=sys.stderr)
             return 1
 
     if args.command != "serve":
@@ -736,7 +736,7 @@ def main() -> int:
     except KeyboardInterrupt:
         stop.set()
     finally:
-        print("[BRIDGE] stopped")
+        print("[BRIDGE] đã dừng")
     return 0
 
 

@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         code = e.code
         return int(code) if isinstance(code, int) else (0 if code is None else 1)
     except KeyboardInterrupt:
-        print("\n[launcher] Ctrl+C -> dung")
+        print("\n[launcher] Ctrl+C để dừng")
         return 130
     except Exception:
         import traceback

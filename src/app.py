@@ -55,7 +55,7 @@ def process_event(event, queue, no_play: bool = False) -> bool:
 def handle_simulate(args=None) -> None:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
-    print(f"Starting simulation... (no_play={no_play}, interrupt_mode={interrupt_mode})")
+    print(f"Bắt đầu mô phỏng... (no_play={no_play}, interrupt_mode={interrupt_mode})")
     queue = PriorityAudioQueue(interrupt_mode=interrupt_mode)
     gen = iter_events(seed=42)
     # Lấy 10 sự kiện (4 join batch + vài cái sau)
@@ -70,20 +70,20 @@ def handle_simulate(args=None) -> None:
         queue.put("greeting", 3, batched, wav)
         print(f"event=join(flushed) -> speak_text='{batched}' -> wav={wav.name} -> queue-size={queue.qsize()}")
 
-    print(f"Simulation done. queue-size={queue.qsize()}")
+    print(f"Mô phỏng xong. hàng-đợi={queue.qsize()}")
     # Layout theo thu tu uu tien de kiem chung 1/2/3
     drained = []
     while not queue.empty():
         item = queue.get()
         drained.append(f"p{item['priority']}:{item['kind']}")
-    print("Drain order (priority): " + ", ".join(drained))
+    print("Thứ tự lấy ra khỏi hàng đợi (theo ưu tiên): " + ", ".join(drained))
 
 
 def _stream_events(args, stop_event: threading.Event):
     """Nguon event: bridge WebSocket that, hoac simulator noi bo (--sim), hoac truc tiep GoLogin CDP."""
     mode = getattr(args, "browser_mode", None) or os.getenv("BROWSER_MODE", "extension")
     if getattr(args, "sim", False):
-        print("[run] nguon event: simulator noi bo (--sim)")
+        print("[run] nguồn sự kiện: simulator nội bộ (--sim)")
         gen = iter_events(seed=42)
         prev_ts = None
         speed = getattr(args, "speed", 1.0)
@@ -97,11 +97,11 @@ def _stream_events(args, stop_event: threading.Event):
             yield ev
     elif mode == "gologin_cdp":
         cdp_port = getattr(args, "cdp_port", None) or int(os.getenv("CDP_PORT", "30899"))
-        print(f"[run] nguon event: ket noi truc tiep GoLogin CDP (port={cdp_port})")
+        print(f"[run] nguồn sự kiện: kết nối trực tiếp GoLogin CDP (cổng {cdp_port})")
         import browser_manager
         yield from browser_manager.stream_cdp_events(stop_event, cdp_port=cdp_port)
     else:
-        print(f"[run] nguon event: bridge {args.bridge}")
+        print(f"[run] nguồn sự kiện: bridge {args.bridge}")
         yield from bridge_mod.iter_events(args.bridge, stop_event)
 
 def handle_run(args) -> int:
@@ -227,7 +227,7 @@ def handle_run(args) -> int:
             if spoke:
                 stats["spoke"] += 1
         except Exception as e:
-            print(f"[run] event error: {type(e).__name__}: {e}", flush=True)
+            print(f"[run] lỗi sự kiện: {type(e).__name__}: {e}", flush=True)
         if not spoke:
             return
         if tts_client.VOICESTUDIO_OK:
@@ -258,7 +258,7 @@ def handle_run(args) -> int:
     except KeyboardInterrupt:
         print("\n[run] Ctrl+C -> dừng")
     except Exception as e:
-        print(f"[run] nguồn event lỗi: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"[run] nguồn sự kiện lỗi: {type(e).__name__}: {e}", file=sys.stderr)
         stop_event.set()
 
     stop_event.set()
@@ -278,7 +278,7 @@ def handle_run(args) -> int:
         batched = get_batcher().flush()
         if batched:
             queue.put("greeting", 3, batched, synthesize(batched))
-            print(f"[run] flush greeting: '{batched}'")
+            print(f"[run] xả câu chào đang gom: '{batched}'")
     except Exception:
         pass
 
@@ -290,12 +290,12 @@ def handle_run(args) -> int:
 
     lat = stats["lat_ms"]
     lat_txt = f"min={min(lat):.0f}ms max={max(lat):.0f}ms avg={sum(lat) / len(lat):.0f}ms" if lat else "n/a"
-    print("=== RUN SUMMARY ===")
-    print(f"events_nhan={received} cau_da_doc={stats['spoke']}")
-    print(f"tts: ok={stats['tts_ok']} fallback={stats['tts_fail']} engine={tts_client.LAST_ENGINE}")
-    print(f"tts_latency: {lat_txt}")
-    print(f"queue: {queue.stats} qsize_con_lai={queue.qsize()}")
-    print(f"play: {'no-play (khong phat tieng)' if no_play else 'da phat ra loa'} "
+    print("=== TỔNG KẾT PHIÊN CHẠY ===")
+    print(f"sự_kiện_nhận={received} câu_đã_đọc={stats['spoke']}")
+    print(f"TTS: ok={stats['tts_ok']} fallback={stats['tts_fail']} engine={tts_client.LAST_ENGINE}")
+    print(f"độ_trễ_TTS: {lat_txt}")
+    print(f"hàng_đợi: {queue.stats} hàng_đợi_còn_lại={queue.qsize()}")
+    print(f"phát: {'no-play (không phát tiếng)' if no_play else 'đã phát ra loa'} "
           f"device={audio_player.output_device_name()}")
     return 0
 
@@ -364,7 +364,7 @@ def _check_queue() -> tuple[bool, str]:
 
 
 def handle_doctor(args) -> int:
-    print("[doctor] Auto Voice TikTok Shop - chan doan")
+    print("[doctor] Auto Voice TikTok Shop — chẩn đoán")
     checks = [
         ("VoiceStudio", _check_voicestudio()),
         ("LLM", _check_llm()),
@@ -380,45 +380,45 @@ def handle_doctor(args) -> int:
         if not ok:
             failed.append(name)
     if failed:
-        print(f"[doctor] ket qua: CO VAN DE ({', '.join(failed)})")
+        print(f"[doctor] kết quả: CÓ VẤN ĐỀ ({', '.join(failed)})")
         return 1
-    print("[doctor] ket qua: TAT CA OK")
+    print("[doctor] kết quả: TẤT CẢ ĐỀU ỔN")
     return 0
 
 
 def handle_live():
-    print("Live mode not fully implemented yet.")
+    print("Chế độ live chưa hoàn thiện đầy đủ.")
 
 
 def handle_stop():
-    print("Stopping app...")
+    print("Đang dừng ứng dụng...")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Auto Voice TikTok Shop LIVE CLI")
     subparsers = parser.add_subparsers(dest="command")
 
-    p_sim = subparsers.add_parser("simulate", help="Simulate events (khong phat tieng)")
-    p_sim.add_argument("--no-play", action="store_true", help="Khong phat tieng ra loa")
+    p_sim = subparsers.add_parser("simulate", help="Mô phỏng sự kiện (không phát tiếng)")
+    p_sim.add_argument("--no-play", action="store_true", help="Không phát tiếng ra loa")
 
-    p_run = subparsers.add_parser("run", help="Vong lap that: event -> tts -> hang doi -> loa")
-    p_run.add_argument("--bridge", default=DEFAULT_BRIDGE, help=f"URL bridge WebSocket (mac dinh {DEFAULT_BRIDGE})")
-    p_run.add_argument("--sim", action="store_true", help="Dung simulator noi bo thay vi bridge")
-    p_run.add_argument("--speed", type=float, default=1.0, help="He so toc do khi --sim")
-    p_run.add_argument("--seconds", type=float, default=0, help="Tu dung sau N giay (0 = vo han)")
-    p_run.add_argument("--max-events", type=int, default=0, help="Tu dung sau N event")
-    p_run.add_argument("--no-play", action="store_true", help="Test khong phat tieng (khong mo loa)")
+    p_run = subparsers.add_parser("run", help="Vòng lặp thật: event -> TTS -> hàng đợi -> loa")
+    p_run.add_argument("--bridge", default=DEFAULT_BRIDGE, help=f"URL bridge WebSocket (mặc định {DEFAULT_BRIDGE})")
+    p_run.add_argument("--sim", action="store_true", help="Dùng simulator nội bộ thay vì bridge")
+    p_run.add_argument("--speed", type=float, default=1.0, help="Hệ số tốc độ khi chạy --sim")
+    p_run.add_argument("--seconds", type=float, default=0, help="Tự dừng sau N giây (0 = vô hạn)")
+    p_run.add_argument("--max-events", type=int, default=0, help="Tự dừng sau N sự kiện")
+    p_run.add_argument("--no-play", action="store_true", help="Chạy thử không phát tiếng (không mở loa)")
 
-    p_run.add_argument("--browser-mode", choices=["extension", "gologin_cdp"], default=None, help="Che do ket noi trinh duyet (extension hoac gologin_cdp)")
-    p_run.add_argument("--cdp-port", type=int, default=30899, help="Cong CDP remote debugging (mac dinh 30899)")
+    p_run.add_argument("--browser-mode", choices=["extension", "gologin_cdp"], default=None, help="Chế độ kết nối trình duyệt (extension hoặc gologin_cdp)")
+    p_run.add_argument("--cdp-port", type=int, default=30899, help="Cổng CDP remote debugging (mặc định 30899)")
     p_run.add_argument("--batch-window-s", type=float, default=None, help="Cửa sổ gom sự kiện (giây, mặc định 5.0)")
     p_run.add_argument("--batch-max-events", type=int, default=None, help="Số sự kiện tối đa mỗi batch (mặc định 10)")
-    p_doc = subparsers.add_parser("doctor", help="Chan doan VoiceStudio / LLM / loa / bridge / hang doi")
+    p_doc = subparsers.add_parser("doctor", help="Chẩn đoán VoiceStudio / LLM / loa / bridge / hàng đợi")
     p_doc.add_argument("--bridge", default=DEFAULT_BRIDGE)
-    p_doc.add_argument("--window", type=float, default=2.0, help="So giay nghe event tu bridge")
+    p_doc.add_argument("--window", type=float, default=2.0, help="Số giây nghe sự kiện từ bridge")
 
-    subparsers.add_parser("live", help="Start live mode")
-    subparsers.add_parser("stop", help="Stop app")
+    subparsers.add_parser("live", help="Khởi chạy chế độ live")
+    subparsers.add_parser("stop", help="Dừng ứng dụng")
     return parser
 
 

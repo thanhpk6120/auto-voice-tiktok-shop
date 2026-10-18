@@ -374,3 +374,4 @@ Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUO
 - **Lọc "meta" của LLM:** câu trả lời đôi khi kèm `[Pre-flight] ... Action: Direct` — `strip_agent_meta()`
   tự cắt bỏ trước khi đưa cho TTS.
 - **Giữ CTA khi cắt bớt câu dài:** nếu vượt `sales_max_words`, câu chốt đơn ("bấm giỏ hàng...") được giữ lại ở cuối.
+- **Simulator sinh đủ 6 loại sự kiện:** thêm `viewing_product` vào `event_simulator.py` để test được luồng ưu tiên P1 tại chỗ (`--sim`).

@@ -38,6 +38,13 @@ ORDERS = [
     {"product": "Tai nghe True Wireless Bass Boost", "amount": 450000},
 ]
 
+# Su kien "dang xem san pham": TikTok Shop phat khi khach bam vao SP trong gio hang.
+VIEWING_PRODUCTS = [
+    "Áo thun nam Cotton Compact",
+    "Kem dưỡng da cấp ẩm Water Gel",
+    "Tai nghe True Wireless Bass Boost",
+]
+
 
 def iter_events(
     seed: int | None = 42,
@@ -60,7 +67,7 @@ def iter_events(
 
     # Phase 2: Vòng lặp phát sinh hỗn hợp đủ 4 loại type (join, chat, gift, order)
     # Đảm bảo phân bổ đều cả 4 loại
-    event_pool = ["chat", "gift", "order", "join", "chat"]
+    event_pool = ["chat", "gift", "order", "join", "chat", "viewing_product"]
 
     while True:
         ev_type = rng.choice(event_pool)
@@ -79,6 +86,15 @@ def iter_events(
                 "type": "chat",
                 "user": user,
                 "text": rng.choice(CHAT_TEMPLATES),
+                "ts": ts,
+            }
+        elif ev_type == "viewing_product":
+            product = rng.choice(VIEWING_PRODUCTS)
+            yield {
+                "type": "viewing_product",
+                "user": user,
+                "product": product,
+                "text": f"{user} đang xem sản phẩm {product}",
                 "ts": ts,
             }
         elif ev_type == "gift":

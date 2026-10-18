@@ -232,3 +232,22 @@ def test_sales_max_words_default_is_75():
     assert settings.DEFAULTS["sales_max_words"] == 75
     assert settings.DEFAULTS["context_live_dir"] == "context-live"
     assert settings.DEFAULTS["remind_min_s"] < settings.DEFAULTS["remind_max_s"]
+
+
+def test_simulator_emits_viewing_product():
+    """Simulator phải sinh được sự kiện viewing_product (để test P1 tại chỗ)."""
+    import itertools
+    import event_simulator
+
+    evs = list(itertools.islice(event_simulator.iter_events(), 60))
+    types = {e["type"] for e in evs}
+    assert "viewing_product" in types, f"thieu viewing_product: {types}"
+    assert {"join", "chat", "gift", "order"} <= types
+    v = next(e for e in evs if e["type"] == "viewing_product")
+    assert v["product"] and v["user"]
+
+    # Cham qua analyze -> phai la P1 va sinh duoc cau doc
+    res = event_analyzer.analyze(v)
+    assert res["kind"] == "viewing_product"
+    assert res["priority"] == 1
+    assert res["speak_text"]

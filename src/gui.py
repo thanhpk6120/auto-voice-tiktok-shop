@@ -485,7 +485,7 @@ class App:
 
         ttk.Label(toolbar, text="Lọc:").pack(side="left", padx=(2, 4))
         self.log_filter_var = tk.StringVar(value="Tất cả")
-        filters = ["Tất cả", "[app]", "[doctor]", "[check]", "[save]", "[run]", "[gui]", "[browser]"]
+        filters = ["Tất cả", "[app]", "[cdp]", "[doctor]", "[check]", "[save]", "[run]", "[gui]", "[browser]"]
         self.filter_cb = ttk.Combobox(toolbar, textvariable=self.log_filter_var, values=filters, state="readonly", width=12)
         self.filter_cb.pack(side="left", padx=2)
         self.filter_cb.bind("<<ComboboxSelected>>", self._on_filter_changed)

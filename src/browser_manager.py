@@ -27,82 +27,211 @@ from typing import Callable, Iterator
 _VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 CDP_SETUP_JS = """
 (() => {
-    if (window.__tiktok_cdp_installed) return;
-    window.__tiktok_cdp_installed = true;
-    window.__tiktok_cdp_queue = window.__tiktok_cdp_queue || [];
+    if (window.__tiktok_cdp_observers && Array.isArray(window.__tiktok_cdp_observers)) {
+        for (const o of window.__tiktok_cdp_observers) {
+            try { o.disconnect(); } catch(e) {}
+        }
+    }
+    window.__tiktok_cdp_observers = [];
+    window.__tiktok_cdp_queue_v2 = window.__tiktok_cdp_queue_v2 || [];
 
-    function pushEvent(type, user, content) {
-        window.__tiktok_cdp_queue.push({
+    const JUNK_PHRASES = [
+        'bình luận của người xem sẽ xuất hiện ở đây',
+        'các đơn hàng đặt trong live của bạn sẽ hiển thị tại đây',
+        'hoạt động của người xem sẽ xuất hiện ở đây',
+        'kéo để thay đổi kích thước',
+        'tin nhắn mới bên trên',
+        'tin nhắn mới bên dưới',
+        'liên quan đến sản phẩm',
+        'trò chuyện',
+        'hoạt động',
+        'tất cả',
+        'xem thêm',
+        'thêm kịch bản',
+        'không có bảng tin video',
+        'bảng điều khiển live',
+        'chuyển chế độ',
+        'flash sale',
+        'quà tặng',
+        'biển quảng cáo',
+        'voucher',
+        'sản phẩm',
+        '0/100', '1/100', '2/100',
+        'yêu cầu minh họa',
+        'thêm vào giỏ',
+        'xem sản phẩm',
+        'quà tặng quảng bá',
+        'tin nhắn từ hệ thống',
+        'người đăng ký',
+        'người theo dõi'
+    ];
+
+    const DATE_TIME_RE = /^(\\d{1,2}[\\/\\-.]\\d{1,2}([\\/\\-.]\\d{2,4})?(\\s+\\d{1,2}(:\\d{2})*)?|\\d{1,2}:\\d{2}(:\\d{2})?)$/;
+
+    function isJunk(text) {
+        if (!text) return true;
+        const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length >= 3) return true;
+        const s = text.trim().toLowerCase();
+        if (s.length < 2) return true;
+        if (DATE_TIME_RE.test(s)) return true;
+        for (const phrase of JUNK_PHRASES) {
+            if (s === phrase || s.startsWith(phrase)) return true;
+        }
+        return false;
+    }
+
+    const seenRecent = new Set();
+    function pushEvent(type, user, content, source, raw) {
+        const key = type + '|' + (user || '') + '|' + (content || '');
+        if (seenRecent.has(key)) return;
+        seenRecent.add(key);
+        setTimeout(() => seenRecent.delete(key), 3000);
+
+        window.__tiktok_cdp_queue_v2.push({
             type: type,
             user: user || 'Khách',
             content: content || '',
             text: content || '',
+            source: source || 'chat',
+            raw: raw || '',
             ts: Date.now() / 1000
         });
     }
 
-    const containerSelectors = [
-        '[data-e2e="chat-list"]',
-        '[data-e2e="comment-list"]',
-        '.webcast-chatroom___items',
-        '.webcast-chatroom',
-        '[class*="chatroom"][class*="items"]',
-        '[class*="comment-list"]',
-        '[class*="CommentList"]',
-        '[role="log"][aria-live]',
-        'div[class*="chat"][class*="list"]',
-    ];
-
-    function findContainer() {
-        for (const sel of containerSelectors) {
-            const el = document.querySelector(sel);
-            if (el) return el;
-        }
-        return document.body;
-    }
-
-    const obs = new MutationObserver((mutations) => {
-        for (const m of mutations) {
-            for (const node of m.addedNodes) {
-                if (node.nodeType === 1) {
-                    const text = (node.innerText || node.textContent || '').trim();
-                    if (!text) continue;
-                    let evType = 'chat';
-                    let user = 'Khách';
-                    let content = text;
-
-                    if (text.includes('vào phòng') || text.includes('joined') || text.includes('vừa vào')) {
-                        evType = 'join';
-                        user = text.replace(/vào phòng.*|joined.*|vừa vào.*/, '').trim() || user;
-                        content = 'vào phòng live';
-                    } else if (text.includes('đã gửi') || text.includes('tặng') || text.includes('sent') || text.includes('gift')) {
-                        evType = 'gift';
-                        content = text;
-                    } else if (text.includes('đặt hàng') || text.includes('chốt đơn') || text.includes('ordered') || text.includes('mua')) {
-                        evType = 'order';
-                        content = text;
-                    } else {
-                        const parts = text.split(/[:：]/, 2);
-                        if (parts.length === 2) {
-                            user = parts[0].trim();
-                            content = parts[1].trim();
-                        }
-                    }
-                    pushEvent(evType, user, content);
+    function findChatList() {
+        const pTags = document.querySelectorAll('p, span, div');
+        for (const p of pTags) {
+            if (p.children.length === 0 && p.innerText.trim() === 'Trò chuyện') {
+                let el = p;
+                while (el && el !== document.body) {
+                    const list = el.querySelector('.arco-list-content, [role="list"], .arco-list-items');
+                    if (list) return list;
+                    el = el.parentElement;
                 }
             }
         }
-    });
+        return document.querySelector('.arco-list-content, [role="list"]');
+    }
 
-    const target = findContainer();
-    obs.observe(target, { childList: true, subtree: true });
+    function findActivityList() {
+        const actDiv = document.querySelector('div.bg-neutral-white.flex-grow.min-h-0');
+        if (actDiv) return actDiv;
+
+        const allSpans = document.querySelectorAll('span, div');
+        for (const s of allSpans) {
+            if (s.children.length === 0 && s.innerText.trim() === 'Hoạt động') {
+                let el = s;
+                while (el && el !== document.body) {
+                    if (el.className && el.className.includes('flex-grow')) {
+                        return el;
+                    }
+                    el = el.parentElement;
+                }
+            }
+        }
+        return null;
+    }
+
+    let chatObs = null;
+    let actObs = null;
+    let lastChatTarget = null;
+    let lastActTarget = null;
+
+    function attachObservers() {
+        const chatList = findChatList();
+        if (chatList && (!chatObs || !lastChatTarget || !lastChatTarget.isConnected)) {
+            if (chatObs) { try { chatObs.disconnect(); } catch(e) {} }
+            chatObs = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    for (const node of m.addedNodes) {
+                        if (node.nodeType === 1) {
+                            const raw = (node.innerText || node.textContent || '').trim();
+                            if (isJunk(raw)) continue;
+
+                            let user = 'Khách';
+                            let text = raw;
+
+                            const nickEl = node.querySelector('[class*="nick"], [class*="user"], [class*="name"]');
+                            if (nickEl) {
+                                user = nickEl.innerText.trim() || user;
+                                text = raw.replace(user, '').trim().replace(/^[:：]\\s*/, '') || raw;
+                            } else {
+                                const parts = raw.split(/[:：]/, 2);
+                                if (parts.length === 2 && parts[0].length < 30) {
+                                    user = parts[0].trim();
+                                    text = parts[1].trim();
+                                }
+                            }
+                            if (isJunk(text)) continue;
+                            pushEvent('chat', user, text, 'Trò chuyện', raw);
+                        }
+                    }
+                }
+            });
+            chatObs.observe(chatList, { childList: true, subtree: true });
+            lastChatTarget = chatList;
+            window.__tiktok_cdp_observers.push(chatObs);
+        }
+
+        const actList = findActivityList();
+        if (actList && (!actObs || !lastActTarget || !lastActTarget.isConnected)) {
+            if (actObs) { try { actObs.disconnect(); } catch(e) {} }
+            actObs = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    for (const node of m.addedNodes) {
+                        if (node.nodeType === 1) {
+                            const raw = (node.innerText || node.textContent || '').trim();
+                            if (isJunk(raw)) continue;
+
+                            let evType = 'chat';
+                            let user = 'Khách';
+                            let text = raw;
+
+                            const s = raw.toLowerCase();
+                            if (s.includes('đặt hàng') || s.includes('mua') || s.includes('chốt đơn') || s.includes('ordered')) {
+                                evType = 'order';
+                            } else if (s.includes('tặng') || s.includes('đã gửi') || s.includes('gift') || s.includes('hoa hồng')) {
+                                evType = 'gift';
+                            } else if (s.includes('vào phòng') || s.includes('joined') || s.includes('follow') || s.includes('chia sẻ')) {
+                                evType = 'join';
+                            }
+
+                            const parts = raw.split(/[:：]/, 2);
+                            if (parts.length === 2 && parts[0].length < 30) {
+                                user = parts[0].trim();
+                                text = parts[1].trim();
+                            }
+                            if (isJunk(text)) continue;
+                            pushEvent(evType, user, text, 'Hoạt động', raw);
+                        }
+                    }
+                }
+            });
+            actObs.observe(actList, { childList: true, subtree: true });
+            lastActTarget = actList;
+            window.__tiktok_cdp_observers.push(actObs);
+        }
+    }
+
+    attachObservers();
+    setInterval(attachObservers, 2000);
+
+    const cTarget = findChatList();
+    const aTarget = findActivityList();
+    return JSON.stringify({
+        chatFound: !!cTarget,
+        chatSnippet: cTarget ? (cTarget.innerText || '').slice(0, 100).replace(/\\s+/g, ' ').trim() : 'Chưa tìm thấy',
+        actFound: !!aTarget,
+        actSnippet: aTarget ? (aTarget.innerText || '').slice(0, 100).replace(/\\s+/g, ' ').trim() : 'Chưa tìm thấy'
+    });
 })();
 """
 
 CDP_POLL_JS = """
 (() => {
-    if (!window.__tiktok_cdp_queue) return "[]";
-    const items = window.__tiktok_cdp_queue.splice(0, window.__tiktok_cdp_queue.length);
+    if (!window.__tiktok_cdp_queue_v2) return "[]";
+    const items = window.__tiktok_cdp_queue_v2.splice(0, window.__tiktok_cdp_queue_v2.length);
     return JSON.stringify(items);
 })()
 """
@@ -703,18 +832,37 @@ def create_gologin_profile(
 def find_chrome_executable(gologin_dir: str | Path | None = None, version: str | None = None) -> Path | None:
     """Tìm file chrome.exe cho phiên bản được chỉ định hoặc phiên bản đang kích hoạt."""
     base = _orbita_base(gologin_dir)
-    ver = version or get_active_chrome_version(gologin_dir)
-    if not ver:
-        return None
+    # 1. Thử version chỉ định
+    if version:
+        vdir = base / version
+        if vdir.exists():
+            target = vdir / "chrome.exe"
+            if target.exists():
+                return target
+            for p in vdir.rglob("chrome.exe"):
+                return p
 
-    target = base / ver / "chrome.exe"
-    if target.exists():
-        return target
+    # 2. Thử version đang active
+    act = get_active_chrome_version(gologin_dir)
+    if act:
+        vdir = base / act
+        if vdir.exists():
+            target = vdir / "chrome.exe"
+            if target.exists():
+                return target
+            for p in vdir.rglob("chrome.exe"):
+                return p
 
-    vdir = base / ver
-    if vdir.exists():
-        for p in vdir.rglob("chrome.exe"):
-            return p
+    # 3. Fallback bất kỳ version nào đã cài đặt
+    installed = get_installed_chrome_versions(gologin_dir)
+    for v in installed:
+        vdir = base / v
+        if vdir.exists():
+            target = vdir / "chrome.exe"
+            if target.exists():
+                return target
+            for p in vdir.rglob("chrome.exe"):
+                return p
 
     return None
 
@@ -759,6 +907,7 @@ def launch_gologin_profile(
         f"--user-data-dir={profile_path}",
         "--disable-encryption",
         "--password-store=basic",
+        "--donut-pie={test:test}",
         "--disable-automation",
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
@@ -767,8 +916,9 @@ def launch_gologin_profile(
         "--disable-gpu",
         "--disable-translate",
         "--disable-default-apps",
+        "--disable-component-extensions-with-background-pages",
+        "--font-masking-mode=2",
     ]
-
     res = meta.get("resolution")
     if res and "x" in str(res).lower():
         parts = str(res).lower().split("x", 1)
@@ -871,7 +1021,20 @@ def stream_cdp_events(
                     "params": {"expression": CDP_SETUP_JS, "returnByValue": True},
                 }
                 ws.send(json.dumps(setup_cmd))
-                _ = ws.recv()
+                setup_resp = json.loads(ws.recv())
+                diag_str = setup_resp.get("result", {}).get("result", {}).get("value", "{}")
+                try:
+                    diag = json.loads(diag_str) if isinstance(diag_str, str) else diag_str
+                except Exception:
+                    diag = {}
+                c_ok = diag.get("chatFound", False)
+                c_snip = diag.get("chatSnippet", "")
+                a_ok = diag.get("actFound", False)
+                a_snip = diag.get("actSnippet", "")
+
+                print(f"[cdp/scan] Đã kết nối tab '{target.get('title', 'TikTok')}'", flush=True)
+                print(f"[cdp/scan] Khung [Trò chuyện] (sẵn sàng={c_ok}): '{c_snip}'", flush=True)
+                print(f"[cdp/scan] Khung [Hoạt động] (sẵn sàng={a_ok}): '{a_snip}'", flush=True)
 
                 while not stop_event.is_set():
                     req_id += 1
@@ -900,6 +1063,11 @@ def stream_cdp_events(
                     for raw_ev in events:
                         if isinstance(raw_ev, dict):
                             raw_ev.setdefault("text", raw_ev.get("content", ""))
+                            src_lbl = raw_ev.get("source", "Trình duyệt")
+                            usr = raw_ev.get("user", "Khách")
+                            txt = raw_ev.get("text", "")
+                            typ = raw_ev.get("type", "chat")
+                            print(f"[cdp/fetch] Khung [{src_lbl}] ({typ}): {usr}: '{txt}'", flush=True)
                         norm = event_bridge.normalize(raw_ev)
                         if norm:
                             yield norm

@@ -53,15 +53,15 @@ hiddenimports = [
     "event_simulator",
     "llm_client",
     "tts_client",
+    "browser_manager",
 ]
-
 excludes = [
+    "gologin-basic-offline",
     "vendor",
     "local_cache",
     "out",
     "dist",
     "build",
-    # thu vien nang khong dung -> giam kich thuoc dist
     "matplotlib",
     "scipy",
     "pandas",

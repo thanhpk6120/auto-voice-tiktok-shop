@@ -79,7 +79,8 @@ def handle_simulate(args=None) -> None:
 
 
 def _stream_events(args, stop_event: threading.Event):
-    """Nguon event: bridge WebSocket that, hoac simulator noi bo (--sim)."""
+    """Nguon event: bridge WebSocket that, hoac simulator noi bo (--sim), hoac truc tiep GoLogin CDP."""
+    mode = getattr(args, "browser_mode", None) or os.getenv("BROWSER_MODE", "extension")
     if getattr(args, "sim", False):
         print("[run] nguon event: simulator noi bo (--sim)")
         gen = iter_events(seed=42)
@@ -93,10 +94,14 @@ def _stream_events(args, stop_event: threading.Event):
                 time.sleep(max(0.0, (ts - prev_ts)) * speed)
             prev_ts = ts
             yield ev
+    elif mode == "gologin_cdp":
+        cdp_port = getattr(args, "cdp_port", None) or int(os.getenv("CDP_PORT", "30899"))
+        print(f"[run] nguon event: ket noi truc tiep GoLogin CDP (port={cdp_port})")
+        import browser_manager
+        yield from browser_manager.stream_cdp_events(stop_event, cdp_port=cdp_port)
     else:
         print(f"[run] nguon event: bridge {args.bridge}")
         yield from bridge_mod.iter_events(args.bridge, stop_event)
-
 
 def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
@@ -227,9 +232,10 @@ def _check_bridge(url: str, window: float) -> tuple[bool, str]:
 def _check_queue() -> tuple[bool, str]:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     q = PriorityAudioQueue(dry_run=True, interrupt_mode=interrupt_mode)
+    q.put("greeting", 3, "hi", "a.wav")
     q.put("order", 1, "cam on", "b.wav")
     size_after = q.qsize()
-    order = [q.get()["priority"], q.get()["priority"]]
+    order = [q.get(timeout=1.0)["priority"], q.get(timeout=1.0)["priority"]]
     ok = size_after == 2 and order == [1, 3] and q.empty()
     return ok, (f"OK uu tien dung p1 truoc p3 (order={order}), size 0->{size_after}->0"
                 if ok else f"FAIL order={order} size={size_after}")
@@ -281,6 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--max-events", type=int, default=0, help="Tu dung sau N event")
     p_run.add_argument("--no-play", action="store_true", help="Test khong phat tieng (khong mo loa)")
 
+    p_run.add_argument("--browser-mode", choices=["extension", "gologin_cdp"], default=None, help="Che do ket noi trinh duyet (extension hoac gologin_cdp)")
+    p_run.add_argument("--cdp-port", type=int, default=30899, help="Cong CDP remote debugging (mac dinh 30899)")
     p_doc = subparsers.add_parser("doctor", help="Chan doan VoiceStudio / LLM / loa / bridge / hang doi")
     p_doc.add_argument("--bridge", default=DEFAULT_BRIDGE)
     p_doc.add_argument("--window", type=float, default=2.0, help="So giay nghe event tu bridge")

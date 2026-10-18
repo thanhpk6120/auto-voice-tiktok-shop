@@ -51,6 +51,12 @@ DEFAULTS: dict = {
     "greeting_cooldown_s": 3.0,
     "greeting_max_batch": 5,
     "sales_max_words": 35,
+    # Browser & GoLogin
+    "gologin_dir": "gologin-basic-offline",
+    "gologin_profiles_dir": "",
+    "gologin_active_version": "",
+    "gologin_profile_id": "",
+    "browser_mode": "gologin_cdp",
     # UI
     "log_level": "INFO",
 }
@@ -74,6 +80,13 @@ SECTIONS: dict = {
         "greeting_cooldown_s",
         "greeting_max_batch",
         "sales_max_words",
+    ],
+    "Trình duyệt / GoLogin": [
+        "gologin_dir",
+        "gologin_profiles_dir",
+        "gologin_active_version",
+        "gologin_profile_id",
+        "browser_mode",
     ],
     "Khac": ["log_level"],
 }
@@ -267,6 +280,12 @@ def apply(cfg: dict | None = None) -> dict:
         )
     except Exception:
         pass
+    # browser & gologin env
+    os.environ["GOLOGIN_DIR"] = str(cfg.get("gologin_dir", "gologin-basic-offline"))
+    os.environ["GOLOGIN_PROFILES_DIR"] = str(cfg.get("gologin_profiles_dir", ""))
+    os.environ["GOLOGIN_ACTIVE_VERSION"] = str(cfg.get("gologin_active_version", ""))
+    os.environ["GOLOGIN_PROFILE_ID"] = str(cfg.get("gologin_profile_id", ""))
+    os.environ["BROWSER_MODE"] = str(cfg.get("browser_mode", "gologin_cdp"))
 
     return cfg
 

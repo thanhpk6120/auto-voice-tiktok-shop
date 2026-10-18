@@ -85,3 +85,15 @@ def test_config_path_writable_location():
     assert isinstance(p, Path)
     # khong nam trong thu muc app (de chay duoc tu Program Files)
     assert ".tmp" not in p.name
+
+
+def test_apply_sets_browser_env():
+    import os
+
+    cfg = settings.get()
+    cfg["gologin_dir"] = "my-custom-gologin"
+    cfg["browser_mode"] = "gologin_cdp"
+    settings.apply(cfg)
+
+    assert os.environ.get("GOLOGIN_DIR") == "my-custom-gologin"
+    assert os.environ.get("BROWSER_MODE") == "gologin_cdp"

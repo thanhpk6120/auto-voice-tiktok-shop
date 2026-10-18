@@ -124,11 +124,12 @@ def test_gui_notebook_tabs_and_actions():
         root.withdraw()
         app = gui.App(root, settings.DEFAULTS)
 
-        # Xac nhan cac tab trong Notebook
+        # Xac nhan cac tab trong Notebook va log luon hien thi o duoi
         tab_names = [app.nb.tab(t, "text") for t in app.nb.tabs()]
         assert "Trạng thái" in tab_names
-        assert "Log đang chạy" in tab_names
         assert set(settings.SECTIONS.keys()).issubset(set(tab_names))
+        assert app.log is not None
+        assert hasattr(app, "log_frame")
 
         # Kiem tra toolbar log
         assert hasattr(app, "clear_log")

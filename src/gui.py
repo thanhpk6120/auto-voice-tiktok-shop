@@ -46,13 +46,15 @@ def child_cmd(extra: list[str]) -> list[str]:
 
 try:
     import tkinter as tk
-    from tkinter import scrolledtext, ttk
+    from tkinter import filedialog, messagebox, scrolledtext, ttk
 
     TK_ERROR: str | None = None
 except Exception as _e:  # pragma: no cover - may thieu tkinter / headless
     tk = None  # type: ignore
     ttk = None  # type: ignore
     scrolledtext = None  # type: ignore
+    filedialog = None  # type: ignore
+    messagebox = None  # type: ignore
     TK_ERROR = f"{type(_e).__name__}: {_e}"
 
 
@@ -203,6 +205,13 @@ def device_spec(label: str) -> str:
             return head
     return text
 
+def extract_profile_id(raw: str) -> str:
+    """Tách profile id từ chuỗi dropdown: 'Name (id)' -> 'id'."""
+    s = str(raw).strip()
+    if s.endswith(")") and " (" in s:
+        return s.rsplit(" (", 1)[1][:-1].strip()
+    return s
+
 
 def coerce_value(raw, current):
     """Chuoi tu Entry -> kieu cua gia tri goc. ValueError neu sai dinh dang so."""
@@ -238,7 +247,7 @@ class _Field:
         self.secret = spec["secret"]
         self.original = spec["value"]
 
-        ttk.Label(parent, text=self.key, width=22).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(parent, text=self.key, width=24).grid(row=row, column=0, sticky="w", padx=6, pady=4)
 
         if self.kind == "bool":
             self.var = tk.BooleanVar(value=bool(self.original))
@@ -246,10 +255,34 @@ class _Field:
         else:
             self.var = tk.StringVar(value="" if self.original is None else str(self.original))
             if self.key == "audio_device":
-                self.widget = ttk.Combobox(parent, textvariable=self.var, values=app._device_labels())
+                self.widget = ttk.Combobox(parent, textvariable=self.var, values=app._device_labels(), width=46)
+            elif self.key == "browser_mode":
+                self.widget = ttk.Combobox(
+                    parent,
+                    textvariable=self.var,
+                    values=["gologin_cdp", "extension"],
+                    state="readonly",
+                    width=46,
+                )
+            elif self.key == "gologin_profile_id":
+                self.widget = ttk.Combobox(
+                    parent,
+                    textvariable=self.var,
+                    values=app._gologin_profile_ids(),
+                    width=46,
+                )
+                app.profile_widget = self.widget
+            elif self.key == "gologin_active_version":
+                self.widget = ttk.Combobox(
+                    parent,
+                    textvariable=self.var,
+                    values=app._chrome_version_labels(),
+                    width=46,
+                )
+                app.chrome_version_widget = self.widget
             else:
                 self.widget = ttk.Entry(
-                    parent, textvariable=self.var, width=44, show="*" if self.secret else ""
+                    parent, textvariable=self.var, width=48, show="*" if self.secret else ""
                 )
                 if self.kind == "number":
                     is_float = isinstance(self.original, float)
@@ -257,14 +290,32 @@ class _Field:
                         validate="key",
                         validatecommand=(app.root.register(app.num_ok), "%P", is_float),
                     )
-        self.widget.grid(row=row, column=1, sticky="we", padx=4, pady=2)
+        self.widget.grid(row=row, column=1, sticky="we", padx=6, pady=4)
 
         if self.secret:
             self.btn = ttk.Button(parent, text="Hiện", width=6, command=self.toggle_secret)
             self.btn.grid(row=row, column=2, padx=4)
+        elif self.key in ("gologin_dir", "gologin_profiles_dir"):
+            btn = ttk.Button(
+                parent,
+                text="Chọn thư mục...",
+                command=lambda k=self.key, v=self.var: app._choose_directory(k, v),
+            )
+            btn.grid(row=row, column=2, padx=4)
+        elif self.key == "gologin_profile_id":
+            btn_add = ttk.Button(parent, text="➕ Tạo Mới...", command=app._open_create_profile_dialog)
+            btn_add.grid(row=row, column=2, padx=2)
+            btn_refresh = ttk.Button(parent, text="🔄 Làm mới", command=app._refresh_profiles)
+            btn_refresh.grid(row=row, column=3, padx=2)
+            btn_launch = ttk.Button(parent, text="🚀 Mở Profile", command=app._launch_profile)
+            btn_launch.grid(row=row, column=4, padx=2)
+        elif self.key == "gologin_active_version":
+            btn_act = ttk.Button(parent, text="Kích hoạt", command=app._activate_selected_version)
+            btn_act.grid(row=row, column=2, padx=2)
+            btn_mgr = ttk.Button(parent, text="Quản lý Chrome...", command=app._open_chrome_manager_dialog)
+            btn_mgr.grid(row=row, column=3, padx=2)
         if self.key == "audio_device":
             app.device_widget = self.widget
-
     def toggle_secret(self) -> None:
         showing = self.widget.cget("show") == ""
         self.widget.configure(show="*" if showing else "")
@@ -276,6 +327,8 @@ class _Field:
             return bool(raw)
         if self.key == "audio_device":
             return device_spec(raw)
+        if self.key == "gologin_profile_id":
+            return extract_profile_id(raw)
         return coerce_value(raw, self.original)
 
     def set_value(self, value) -> None:
@@ -296,33 +349,39 @@ class App:
         self.devices_dirty = False
 
         root.title(TITLE)
-        root.minsize(720, 600)
+        root.minsize(920, 680)
+        self._center_window(1040, 780)
+        self._setup_styles()
 
-        # Thanh hanh dong o duoi cung, luon co dinh
+        self.device_widget = None
+        self.profile_widget = None
+        self.chrome_version_widget = None
+
+        # 1. Thanh hanh dong o duoi cung nhat
         self._build_actions(root)
 
-        # Notebook chiem toan bo phan tren
+        # 2. Khung log hoat dong luon hien thi o duoi cung (Khong nam trong tab)
+        self.log_frame = ttk.LabelFrame(root, text="Log hoạt động (Thời gian thực)", padding=6)
+        self.log_frame.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
+        self._build_log_panel(self.log_frame)
+        self.tab_log = self.log_frame
+
+        # 3. Notebook o phan tren
         self.nb = ttk.Notebook(root)
-        self.nb.pack(side="top", fill="both", expand=True, padx=6, pady=(6, 0))
+        self.nb.pack(side="top", fill="both", expand=True, padx=8, pady=6)
 
         self.fields: list[_Field] = []
         for sec in build_form(settings.SECTIONS, self.cfg, settings.SECRET_KEYS):
-            frame = ttk.Frame(self.nb)
+            frame = ttk.Frame(self.nb, padding=6)
             self.nb.add(frame, text=sec["section"])
             frame.columnconfigure(1, weight=1)
             for i, spec in enumerate(sec["fields"]):
                 self.fields.append(_Field(self, frame, i, spec))
 
         # Tab Trang thai
-        self.tab_status = ttk.Frame(self.nb)
+        self.tab_status = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_status, text="Trạng thái")
         self._build_status_tab(self.tab_status)
-
-        # Tab Log dang chay
-        self.tab_log = ttk.Frame(self.nb)
-        self.nb.add(self.tab_log, text="Log đang chạy")
-        self._build_log_tab(self.tab_log)
-
         self._write(f"config: {settings.config_path()}")
         self._write(f"data  : {launcher.app_dir()} | meipass={getattr(sys, '_MEIPASS', '-')}")
         self._write(f"audio : {len(self.devices)} thiết bị ra")
@@ -419,20 +478,15 @@ class App:
         bar_reset.pack(fill="x", pady=6)
         ttk.Button(bar_reset, text="Đặt lại số đếm", command=self.reset_status_counters).pack(side="right")
 
-    # ------------------------------ tab Log dang chay ------------------------------
-    def _build_log_tab(self, parent) -> None:
-        toolbar = ttk.Frame(parent, padding=4)
-        toolbar.pack(fill="x")
+    # ------------------------------ Khung log hoat dong (luon hien thi o duoi) ------------------------------
+    def _build_log_panel(self, parent) -> None:
+        toolbar = ttk.Frame(parent, padding=(2, 2))
+        toolbar.pack(fill="x", pady=(0, 2))
 
         ttk.Label(toolbar, text="Lọc:").pack(side="left", padx=(2, 4))
         self.log_filter_var = tk.StringVar(value="Tất cả")
-        self.filter_cb = ttk.Combobox(
-            toolbar,
-            textvariable=self.log_filter_var,
-            values=["Tất cả", "[app]", "[doctor]", "[check]", "[save]", "[run]", "[gui]"],
-            state="readonly",
-            width=10,
-        )
+        filters = ["Tất cả", "[app]", "[doctor]", "[check]", "[save]", "[run]", "[gui]", "[browser]"]
+        self.filter_cb = ttk.Combobox(toolbar, textvariable=self.log_filter_var, values=filters, state="readonly", width=12)
         self.filter_cb.pack(side="left", padx=2)
         self.filter_cb.bind("<<ComboboxSelected>>", self._on_filter_changed)
 
@@ -443,9 +497,10 @@ class App:
         ttk.Button(toolbar, text="Sao chép log", command=self.copy_log).pack(side="left", padx=3)
         ttk.Button(toolbar, text="Mở thư mục log", command=self.open_log_dir).pack(side="left", padx=3)
 
-        self.log = scrolledtext.ScrolledText(parent, height=14, state="disabled", wrap="word")
-        self.log.pack(fill="both", expand=True, padx=4, pady=(0, 4))
+        self.log = scrolledtext.ScrolledText(parent, height=10, state="disabled", wrap="word", font=("Consolas", 9))
+        self.log.pack(fill="both", expand=True, padx=2, pady=(2, 2))
 
+    _build_log_tab = _build_log_panel
     def clear_log(self) -> None:
         self._raw_lines.clear()
         self.log.configure(state="normal")
@@ -551,19 +606,47 @@ class App:
         self.root.after(POLL_MS, self._poll_log)
 
     # -------------------------------- actions --------------------------------
+    def _center_window(self, width: int, height: int) -> None:
+        try:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = max(0, (sw - width) // 2)
+            y = max(0, (sh - height) // 2)
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            self.root.geometry(f"{width}x{height}")
+
+    def _setup_styles(self) -> None:
+        try:
+            style = ttk.Style()
+            if "clam" in style.theme_names():
+                style.theme_use("clam")
+            style.configure("TButton", padding=(8, 4), font=("Segoe UI", 9))
+            style.configure("Primary.TButton", font=("Segoe UI", 9, "bold"), foreground="#0055aa")
+            style.configure("Danger.TButton", font=("Segoe UI", 9, "bold"), foreground="#bb2200")
+            style.configure("TLabel", font=("Segoe UI", 9))
+            style.configure("TCheckbutton", font=("Segoe UI", 9))
+            style.configure("TLabelframe.Label", font=("Segoe UI", 9, "bold"))
+        except Exception:
+            pass
+
     def _build_actions(self, root) -> None:
-        bar = ttk.Frame(root)
-        bar.pack(side="bottom", fill="x", padx=6, pady=6)
-        ttk.Button(bar, text="Lưu", command=self.save).pack(side="left", padx=2)
-        ttk.Button(bar, text="Kiểm tra kết nối", command=self.check_connections).pack(side="left", padx=2)
-        ttk.Button(bar, text="Khởi động", command=self.start).pack(side="left", padx=2)
-        ttk.Button(bar, text="Dừng", command=self.stop).pack(side="left", padx=2)
-        ttk.Button(bar, text="Mở file config", command=self.open_config).pack(side="left", padx=2)
-        ttk.Button(bar, text="Đọc lại", command=self.reload).pack(side="left", padx=2)
-        ttk.Button(bar, text="Chẩn đoán (doctor)", command=self.doctor).pack(side="left", padx=2)
-        ttk.Button(bar, text="Mở thư mục log", command=self.open_log_dir).pack(side="left", padx=2)
+        bar = ttk.Frame(root, padding=(8, 6))
+        bar.pack(side="bottom", fill="x")
+
+        ttk.Button(bar, text="▶ Khởi động", command=self.start, style="Primary.TButton").pack(side="left", padx=3)
+        ttk.Button(bar, text="⏹ Dừng", command=self.stop, style="Danger.TButton").pack(side="left", padx=3)
+
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6, pady=2)
+
+        ttk.Button(bar, text="💾 Lưu cấu hình", command=self.save).pack(side="left", padx=3)
+        ttk.Button(bar, text="🔌 Kiểm tra kết nối", command=self.check_connections).pack(side="left", padx=3)
+        ttk.Button(bar, text="🩺 Chẩn đoán (doctor)", command=self.doctor).pack(side="left", padx=3)
+        ttk.Button(bar, text="🔄 Đọc lại", command=self.reload).pack(side="left", padx=3)
+        ttk.Button(bar, text="📂 Mở file config", command=self.open_config).pack(side="left", padx=3)
+
         self.sim_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Mô phỏng (--sim)", variable=self.sim_var).pack(side="left", padx=8)
+        ttk.Checkbutton(bar, text="Mô phỏng (--sim)", variable=self.sim_var).pack(side="right", padx=6)
 
     @staticmethod
     def num_ok(proposed: str, is_float: bool) -> bool:
@@ -586,6 +669,421 @@ class App:
     def _fill_devices(self) -> None:
         if self.device_widget is not None:
             self.device_widget.configure(values=self._device_labels())
+
+    # ---------------------------- Browser & GoLogin ----------------------------
+    def _get_field_val(self, key: str) -> str:
+        for f in self.fields:
+            if f.key == key:
+                return str(f.var.get()).strip()
+        return str(self.cfg.get(key) or "").strip()
+
+    def _choose_directory(self, key: str, var: tk.StringVar) -> None:
+        init_dir = var.get().strip() or os.getcwd()
+        if filedialog:
+            folder = filedialog.askdirectory(parent=self.root, title=f"Chọn thư mục cho {key}", initialdir=init_dir)
+            if folder:
+                var.set(folder)
+                self._write(f"[browser] Đã chọn {key}: {folder}")
+                if key == "gologin_dir":
+                    self._refresh_chrome_versions()
+                if key in ("gologin_dir", "gologin_profiles_dir"):
+                    self._refresh_profiles()
+
+    def _gologin_profile_ids(self) -> list[str]:
+        try:
+            import browser_manager
+            p_dir = self._get_field_val("gologin_profiles_dir")
+            g_dir = self._get_field_val("gologin_dir")
+            resolved_p = browser_manager.resolve_profiles_dir(p_dir or None, g_dir or None)
+            profiles = browser_manager.list_gologin_profiles(resolved_p)
+            res = []
+            for p in profiles:
+                if p["name"] and p["name"] != p["id"]:
+                    res.append(f"{p['name']} ({p['id']})")
+                else:
+                    res.append(p["id"])
+            return res
+        except Exception:
+            return []
+
+    def _chrome_version_labels(self) -> list[str]:
+        try:
+            import browser_manager
+            g_dir = self._get_field_val("gologin_dir")
+            resolved_g = browser_manager.resolve_gologin_dir(g_dir or None)
+            return browser_manager.get_installed_chrome_versions(resolved_g)
+        except Exception:
+            return []
+
+    def _refresh_profiles(self) -> None:
+        ids = self._gologin_profile_ids()
+        if self.profile_widget is not None:
+            self.profile_widget.configure(values=ids)
+            if ids and not self.profile_widget.get():
+                self.profile_widget.set(ids[0])
+        self._write(f"[browser] Đã làm mới danh sách profiles ({len(ids)} profile)")
+
+    def _refresh_chrome_versions(self) -> None:
+        vers = self._chrome_version_labels()
+        if self.chrome_version_widget is not None:
+            self.chrome_version_widget.configure(values=vers)
+            try:
+                import browser_manager
+                g_dir = self._get_field_val("gologin_dir")
+                active = browser_manager.get_active_chrome_version(g_dir or None)
+                if active and (not self.chrome_version_widget.get() or self.chrome_version_widget.get() not in vers):
+                    self.chrome_version_widget.set(active)
+            except Exception:
+                pass
+        self._write(f"[browser] Đã làm mới phiên bản Chrome đã cài ({len(vers)} bản)")
+
+    def _activate_selected_version(self) -> None:
+        ver = self.chrome_version_widget.get().strip() if self.chrome_version_widget else ""
+        if not ver:
+            self._write("[browser] Chưa chọn phiên bản Chrome để kích hoạt")
+            return
+        try:
+            import browser_manager
+            g_dir = self._get_field_val("gologin_dir")
+            ok, msg = browser_manager.set_active_chrome_version(g_dir or None, ver)
+            self._write(f"[browser] {msg}")
+            if ok and messagebox:
+                messagebox.showinfo("Kích hoạt Chrome", msg, parent=self.root)
+            elif not ok and messagebox:
+                messagebox.showerror("Lỗi", msg, parent=self.root)
+        except Exception as e:
+            self._write(f"[browser] Lỗi kích hoạt Chrome: {e}")
+
+    def _launch_profile(self) -> None:
+        raw = self.profile_widget.get().strip() if self.profile_widget else ""
+        pid = extract_profile_id(raw)
+        if not pid:
+            self._write("[browser] Chưa có profile nào được chọn hoặc tạo. Mở hộp thoại tạo profile mới.")
+            if messagebox:
+                if messagebox.askyesno(
+                    "Chưa có Profile",
+                    "Hiện chưa chọn Profile nào. Bạn có muốn tạo Profile GoLogin mới ngay bây giờ không?",
+                    parent=self.root,
+                ):
+                    self._open_create_profile_dialog()
+            return
+        try:
+            import browser_manager
+            g_dir = self._get_field_val("gologin_dir")
+            p_dir = self._get_field_val("gologin_profiles_dir")
+            proc, port, url = browser_manager.launch_gologin_profile(
+                profile_id=pid,
+                gologin_dir=g_dir or None,
+                profiles_dir=p_dir or None,
+            )
+            if proc is None:
+                self._write(f"[browser] Không mở được profile: {url}")
+                if messagebox:
+                    messagebox.showerror("Lỗi khởi chạy", url, parent=self.root)
+            else:
+                self._write(f"[browser] Đã mở profile '{pid}' (PID={proc.pid}, CDP debug: {url})")
+        except Exception as e:
+            self._write(f"[browser] Lỗi mở profile: {e}")
+    def _open_create_profile_dialog(self) -> None:
+        if not tk:
+            return
+        try:
+            import browser_manager
+        except Exception as e:
+            self._write(f"[browser] Lỗi import browser_manager: {e}")
+            return
+
+        g_dir = self._get_field_val("gologin_dir")
+        p_dir = self._get_field_val("gologin_profiles_dir")
+        resolved_g = browser_manager.resolve_gologin_dir(g_dir or None)
+        resolved_p = browser_manager.resolve_profiles_dir(p_dir or None, resolved_g)
+        installed_vers = browser_manager.get_installed_chrome_versions(resolved_g)
+        active_ver = browser_manager.get_active_chrome_version(resolved_g)
+
+        win = tk.Toplevel(self.root)
+        win.title("Tạo Profile GoLogin Mới")
+        win.minsize(540, 520)
+        win.transient(self.root)
+        win.grab_set()
+
+        try:
+            sw = win.winfo_screenwidth()
+            sh = win.winfo_screenheight()
+            win.geometry(f"560x540+{(sw-560)//2}+{(sh-540)//2}")
+        except Exception:
+            pass
+
+        pad = ttk.Frame(win, padding=16)
+        pad.pack(fill="both", expand=True)
+
+        ttk.Label(pad, text="Cấu hình thông số Profile mới", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 10))
+
+        grid_frame = ttk.Frame(pad)
+        grid_frame.pack(fill="both", expand=True)
+        grid_frame.columnconfigure(1, weight=1)
+
+        row = 0
+        ttk.Label(grid_frame, text="Tên Profile:").grid(row=row, column=0, sticky="w", pady=4)
+        name_var = tk.StringVar(value="TikTok Shop Live")
+        ttk.Entry(grid_frame, textvariable=name_var).grid(row=row, column=1, sticky="we", padx=6, pady=4)
+
+        row += 1
+        ttk.Label(grid_frame, text="Phiên bản Chrome:").grid(row=row, column=0, sticky="w", pady=4)
+        ver_var = tk.StringVar(value=active_ver if active_ver else (installed_vers[0] if installed_vers else "141"))
+        cb_ver = ttk.Combobox(grid_frame, textvariable=ver_var, values=installed_vers or ["141", "120"], state="readonly")
+        cb_ver.grid(row=row, column=1, sticky="we", padx=6, pady=4)
+
+        row += 1
+        ttk.Label(grid_frame, text="Độ phân giải:").grid(row=row, column=0, sticky="w", pady=4)
+        res_var = tk.StringVar(value="1920x1080")
+        cb_res = ttk.Combobox(grid_frame, textvariable=res_var, values=["1920x1080", "1366x768", "1440x900", "2560x1440", "1280x720"], state="readonly")
+        cb_res.grid(row=row, column=1, sticky="we", padx=6, pady=4)
+
+        row += 1
+        ttk.Label(grid_frame, text="Ngôn ngữ:").grid(row=row, column=0, sticky="w", pady=4)
+        lang_var = tk.StringVar(value="vi-VN")
+        cb_lang = ttk.Combobox(grid_frame, textvariable=lang_var, values=["vi-VN", "en-US"], state="readonly")
+        cb_lang.grid(row=row, column=1, sticky="we", padx=6, pady=4)
+
+        row += 1
+        ttk.Label(grid_frame, text="URL khởi động:").grid(row=row, column=0, sticky="w", pady=4)
+        url_var = tk.StringVar(value="https://shop.tiktok.com/streamer/live/product/dashboard")
+        ttk.Entry(grid_frame, textvariable=url_var).grid(row=row, column=1, sticky="we", padx=6, pady=4)
+
+        row += 1
+        grp_proxy = ttk.LabelFrame(grid_frame, text="Cấu hình Proxy (Tuỳ chọn)", padding=8)
+        grp_proxy.grid(row=row, column=0, columnspan=2, sticky="we", pady=(10, 4))
+        grp_proxy.columnconfigure(1, weight=1)
+
+        p_row = 0
+        ttk.Label(grp_proxy, text="Loại Proxy:").grid(row=p_row, column=0, sticky="w", pady=2)
+        proxy_mode_var = tk.StringVar(value="none")
+        cb_pm = ttk.Combobox(grp_proxy, textvariable=proxy_mode_var, values=["none", "http", "socks5"], state="readonly", width=12)
+        cb_pm.grid(row=p_row, column=1, sticky="w", padx=6, pady=2)
+
+        p_row += 1
+        ttk.Label(grp_proxy, text="Host / IP:").grid(row=p_row, column=0, sticky="w", pady=2)
+        host_var = tk.StringVar()
+        ttk.Entry(grp_proxy, textvariable=host_var).grid(row=p_row, column=1, sticky="we", padx=6, pady=2)
+
+        p_row += 1
+        ttk.Label(grp_proxy, text="Cổng (Port):").grid(row=p_row, column=0, sticky="w", pady=2)
+        port_var = tk.StringVar()
+        ttk.Entry(grp_proxy, textvariable=port_var, width=12).grid(row=p_row, column=1, sticky="w", padx=6, pady=2)
+
+        p_row += 1
+        ttk.Label(grp_proxy, text="Username:").grid(row=p_row, column=0, sticky="w", pady=2)
+        user_var = tk.StringVar()
+        ttk.Entry(grp_proxy, textvariable=user_var).grid(row=p_row, column=1, sticky="we", padx=6, pady=2)
+
+        p_row += 1
+        ttk.Label(grp_proxy, text="Mật khẩu:").grid(row=p_row, column=0, sticky="w", pady=2)
+        pass_var = tk.StringVar()
+        ttk.Entry(grp_proxy, textvariable=pass_var, show="*").grid(row=p_row, column=1, sticky="we", padx=6, pady=2)
+
+        btn_box = ttk.Frame(pad)
+        btn_box.pack(fill="x", pady=(14, 0))
+
+        def _create():
+            p_name = name_var.get().strip() or "TikTok Shop Live"
+            p_ver = ver_var.get().strip()
+            p_res = res_var.get().strip()
+            p_lang = lang_var.get().strip()
+            p_url = url_var.get().strip()
+            pm = proxy_mode_var.get().strip()
+            ph = host_var.get().strip()
+            pp = port_var.get().strip()
+            pu = user_var.get().strip()
+            pw = pass_var.get().strip()
+
+            profile, msg = browser_manager.create_gologin_profile(
+                profiles_dir=resolved_p,
+                gologin_dir=resolved_g,
+                name=p_name,
+                version=p_ver,
+                resolution=p_res,
+                language=p_lang,
+                proxy_mode=pm,
+                proxy_host=ph,
+                proxy_port=int(pp) if pp.isdigit() else 0,
+                proxy_user=pu,
+                proxy_pass=pw,
+                start_url=p_url,
+            )
+            if profile:
+                self._write(f"[browser] {msg}")
+                self._refresh_profiles()
+                new_label = f"{profile['name']} ({profile['id']})"
+                if self.profile_widget:
+                    self.profile_widget.set(new_label)
+                for f in self.fields:
+                    if f.key == "gologin_profile_id":
+                        f.var.set(new_label)
+                if messagebox:
+                    messagebox.showinfo("Thành công", f"Đã tạo profile thành công!\n\nID: {profile['id']}", parent=win)
+                win.destroy()
+            else:
+                self._write(f"[browser] Lỗi tạo profile: {msg}")
+                if messagebox:
+                    messagebox.showerror("Lỗi", msg, parent=win)
+
+        ttk.Button(btn_box, text="Tạo Profile", command=_create, style="Primary.TButton").pack(side="right", padx=6)
+        ttk.Button(btn_box, text="Huỷ", command=win.destroy).pack(side="right", padx=4)
+
+    def _open_chrome_manager_dialog(self) -> None:
+        try:
+            import browser_manager
+        except Exception as e:
+            self._write(f"[browser] Lỗi import browser_manager: {e}")
+            return
+
+        g_dir = self._get_field_val("gologin_dir")
+        resolved_g_dir = browser_manager.resolve_gologin_dir(g_dir or None)
+
+        if not tk:
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Quản lý phiên bản Chrome & Orbita")
+        win.minsize(580, 430)
+        win.transient(self.root)
+        win.grab_set()
+
+        pad = ttk.Frame(win, padding=12)
+        pad.pack(fill="both", expand=True)
+
+        lbl_info = ttk.Label(pad, text=f"Thư mục Orbita: {resolved_g_dir}", font=("", 9))
+        lbl_info.pack(anchor="w", pady=(0, 6))
+
+        grp_installed = ttk.LabelFrame(pad, text="Các phiên bản đã cài đặt", padding=8)
+        grp_installed.pack(fill="both", expand=True, pady=(0, 10))
+
+        frame_list = ttk.Frame(grp_installed)
+        frame_list.pack(fill="both", expand=True)
+
+        lb = tk.Listbox(frame_list, height=6)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(frame_list, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        def _refresh_list():
+            lb.delete(0, "end")
+            active_ver = browser_manager.get_active_chrome_version(resolved_g_dir)
+            versions = browser_manager.get_installed_chrome_versions(resolved_g_dir)
+            for v in versions:
+                tag = " [ĐANG KÍCH HOẠT]" if v == active_ver else ""
+                lb.insert("end", f"{v}{tag}")
+
+        _refresh_list()
+
+        btn_row = ttk.Frame(grp_installed)
+        btn_row.pack(fill="x", pady=(6, 0))
+
+        def _act():
+            sel = lb.curselection()
+            if not sel:
+                if messagebox:
+                    messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 phiên bản từ danh sách.", parent=win)
+                return
+            item_text = lb.get(sel[0]).split()[0]
+            ok, msg = browser_manager.set_active_chrome_version(resolved_g_dir, item_text)
+            self._write(f"[browser] {msg}")
+            if ok:
+                _refresh_list()
+                self._refresh_chrome_versions()
+                if messagebox:
+                    messagebox.showinfo("Thành công", msg, parent=win)
+            else:
+                if messagebox:
+                    messagebox.showerror("Lỗi", msg, parent=win)
+
+        def _del():
+            sel = lb.curselection()
+            if not sel:
+                if messagebox:
+                    messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 phiên bản từ danh sách để xoá.", parent=win)
+                return
+            item_text = lb.get(sel[0]).split()[0]
+            if messagebox and not messagebox.askyesno("Xác nhận xoá", f"Bạn có chắc muốn xoá phiên bản Chrome {item_text}?", parent=win):
+                return
+            ok, msg = browser_manager.delete_chrome_version(resolved_g_dir, item_text)
+            self._write(f"[browser] {msg}")
+            if ok:
+                _refresh_list()
+                self._refresh_chrome_versions()
+                if messagebox:
+                    messagebox.showinfo("Thành công", msg, parent=win)
+            else:
+                if messagebox:
+                    messagebox.showerror("Lỗi", msg, parent=win)
+
+        ttk.Button(btn_row, text="Kích hoạt phiên bản này", command=_act).pack(side="left", padx=4)
+        ttk.Button(btn_row, text="Xoá phiên bản này", command=_del).pack(side="left", padx=4)
+
+        grp_dl = ttk.LabelFrame(pad, text="Tải phiên bản mới từ GitHub Release", padding=8)
+        grp_dl.pack(fill="x", expand=False)
+
+        row_dl = ttk.Frame(grp_dl)
+        row_dl.pack(fill="x", pady=4)
+
+        ttk.Label(row_dl, text="Chọn phiên bản:").pack(side="left", padx=(0, 6))
+        remote_releases = browser_manager.fetch_remote_chrome_releases()
+        ver_map = {(r.get("name") or r["version"]): r for r in remote_releases}
+        ver_options = list(ver_map.keys())
+
+        dl_var = tk.StringVar(value=ver_options[0] if ver_options else "")
+        cb_dl = ttk.Combobox(row_dl, textvariable=dl_var, values=ver_options, state="readonly", width=42)
+        cb_dl.pack(side="left", padx=4)
+
+        lbl_dl_status = ttk.Label(grp_dl, text="Sẵn sàng tải.", foreground="gray")
+        lbl_dl_status.pack(anchor="w", pady=(4, 0))
+
+        def _start_download():
+            chosen_label = dl_var.get()
+            if not chosen_label or chosen_label not in ver_map:
+                if messagebox:
+                    messagebox.showwarning("Cảnh báo", "Vui lòng chọn phiên bản hợp lệ.", parent=win)
+                return
+            info = ver_map[chosen_label]
+            chosen_ver = info["version"]
+            lbl_dl_status.configure(text=f"Đang tải {chosen_label}... Vui lòng đợi trong giây lát.", foreground="blue")
+            self._write(f"[browser] Bắt đầu tải {chosen_label}...")
+
+            def _worker():
+                def _prog(msg):
+                    self._write(f"[browser] {msg}")
+                    def _ui_msg():
+                        try:
+                            if win.winfo_exists():
+                                lbl_dl_status.configure(text=msg)
+                        except Exception:
+                            pass
+                    self.root.after(0, _ui_msg)
+
+                ok, msg = browser_manager.install_chrome_from_url(
+                    resolved_g_dir,
+                    chosen_ver,
+                    chrome_url=info["chrome_url"],
+                    driver_url=info.get("driver_url"),
+                    progress_cb=_prog,
+                )
+                self._write(f"[browser] {msg}")
+                def _ui_done():
+                    try:
+                        if win.winfo_exists():
+                            if ok:
+                                lbl_dl_status.configure(text=f"✅ {msg}", foreground="green")
+                                _refresh_list()
+                                self._refresh_chrome_versions()
+                            else:
+                                lbl_dl_status.configure(text=f"❌ {msg}", foreground="red")
+                    except Exception:
+                        pass
+                self.root.after(0, _ui_done)
+            threading.Thread(target=_worker, daemon=True).start()
+
+        ttk.Button(row_dl, text="Tải và Cài đặt", command=_start_download).pack(side="left", padx=6)
 
     def collect(self) -> dict:
         """Doc form -> cfg. ValueError neu co o so sai dinh dang."""

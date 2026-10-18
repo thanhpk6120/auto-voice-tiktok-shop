@@ -255,7 +255,7 @@ python src/gui.py          # chạy từ source
 | VoiceStudio TTS | `voicestudio_url`, `voicestudio_voice`, `voicestudio_model`, `tts_timeout_s` |
 | Event Bridge | `bridge_url`, `bridge_port` |
 | Audio & Analyzer | `audio_device`, `no_play`, `interrupt_mode` (`finish`/`interrupt`), `context_dir`, `out_dir`, `greeting_cooldown_s`, `greeting_max_batch`, `sales_max_words` |
-
+| Trình duyệt / GoLogin | `gologin_dir`, `gologin_profiles_dir`, `gologin_active_version`, `gologin_profile_id`, `browser_mode` (`extension`/`gologin_cdp`) |
 Config lưu ở `%APPDATA%\AutoVoiceTikTokShop\config.json` (không ghi vào thư mục app →
 chạy được cả khi đặt trong `Program Files`). Ghi đè bằng biến môi trường
 `AUTO_VOICE_CONFIG=<duong dan json>` khi cần nhiều profile.
@@ -282,4 +282,23 @@ Ví dụ `config.json`:
 > VoiceStudio ở máy local hoặc máy khác trong LAN. Model OmniVoice ~2.5 GB + CUDA nên
 > không đóng gói kèm được.
 
+
+### Quản lý Trình duyệt GoLogin & Phiên bản Chrome
+
+Ứng dụng tích hợp sẵn bộ quản lý trình duyệt GoLogin Offline và nhân trình duyệt Orbita Browser:
+
+1. **Cấu hình đường dẫn & Profile:**
+   - `gologin_dir`: Thư mục GoLogin (mặc định `./gologin-basic-offline`), có nút chọn thư mục trên GUI.
+   - `gologin_profiles_dir`: Thư mục lưu dữ liệu profile/cookies TikTok Shop.
+   - `gologin_profile_id`: Tự động quét và hiển thị danh sách profile. Nút **Mở Profile** khởi chạy Orbita với cổng CDP debug.
+   - `browser_mode`:
+     - `extension`: Nhận sự kiện qua Chrome Extension & WebSocket bridge.
+     - `gologin_cdp`: Kết nối trực tiếp qua **Chrome DevTools Protocol (CDP)** tại cổng debug, inject observer đọc chat tự động mà **không cần cài Extension**.
+
+2. **Quản lý Phiên bản Chrome (Tải / Xoá / Kích hoạt):**
+   - Nút **Quản lý Chrome...** mở hộp thoại chuyên biệt:
+     - Xem các phiên bản đã cài đặt trong máy (141, 120...).
+     - **Kích hoạt** phiên bản mong muốn.
+     - **Xoá** phiên bản không dùng (có cơ chế bảo vệ: không cho xoá phiên bản đang kích hoạt).
+     - **Tải phiên bản mới từ GitHub Release**: Chọn phiên bản từ danh sách (141, 120, 119, 118...), tự động tải và giải nén Orbita Browser + ChromeDriver trong luồng nền.
 Bằng chứng build + config override: [`docs/TEST-BUILD.md`](docs/TEST-BUILD.md).

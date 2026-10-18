@@ -94,11 +94,23 @@ def clean_speak_text(text: str, max_words: int = 45) -> str:
     return body
 
 _VI_STOPWORDS = {
+    # Danh từ / Định lượng chung
     "ăn", "vặt", "đồ", "nhẹ", "món", "sản", "phẩm", "hàng", "loại", "giá",
-    "deal", "túi", "hộp", "shop", "tiền", "bịch", "gói", "cho", "của", "và",
-    "các", "những", "này", "kia", "đó", "với", "rất", "thực", "phẩm", "khô",
-    "tặng", "mua", "bán", "1kg", "500g", "250g", "food", "snack",
-    "nhà", "ơi", "ạ", "nhé", "hôm", "nay", "mình", "bạn", "em", "anh", "chị", "thế", "nào"
+    "deal", "túi", "hộp", "shop", "tiền", "bịch", "gói", "lon", "hũ", "set",
+    "1kg", "500g", "250g", "food", "snack", "combo", "vị", "hạn", "sl", "id",
+    "chuẩn", "chất", "lượng", "loại",
+    # Quan hệ từ / Đại từ xưng hô
+    "cho", "của", "và", "các", "những", "này", "kia", "đó", "với", "rất",
+    "thực", "khô", "tặng", "mua", "bán", "nhà", "ơi", "ạ", "nhé", "hôm", "nay",
+    "mình", "bạn", "em", "anh", "chị", "cô", "bác", "thế", "nào", "gì", "ai",
+    "sao", "đâu", "được", "nhiều", "ít", "quá", "lắm", "thì", "là", "mà", "ở",
+    # Từ hỏi / Trợ từ
+    "có", "không", "chưa", "hả", "chăng", "phải", "bao", "nhiêu", "vậy",
+    # Tính từ chung
+    "ngon", "giòn", "thơm", "cay", "siêu", "mát", "đẹp", "tốt",
+    # Động từ / Hoạt động chung
+    "làm", "từ", "miễn", "phí", "vận", "chuyển", "ship", "gửi", "đặt", "chốt",
+    "xem", "hỏi", "thử", "thấy", "biết", "xin"
 }
 
 
@@ -140,22 +152,26 @@ class ChatIntent:
                     break
             if not name:
                 continue
-            tokens = [t.lower() for t in re.findall(r"\w+", name, flags=re.UNICODE)]
-            keywords = {t for t in tokens if len(t) >= 2 and t not in _VI_STOPWORDS}
+            raw_tokens = [t.lower() for t in re.findall(r"\w+", name, flags=re.UNICODE)]
+            keywords = {t for t in raw_tokens if len(t) >= 2 and t not in _VI_STOPWORDS}
+            bigrams = set()
+            for i in range(len(raw_tokens) - 1):
+                w1, w2 = raw_tokens[i], raw_tokens[i + 1]
+                if w1 not in _VI_STOPWORDS or w2 not in _VI_STOPWORDS:
+                    bigrams.add(f"{w1} {w2}")
             price = ""
             for line in text.splitlines():
                 line = line.strip()
                 if line.startswith("Giá:"):
                     price = line.split(":", 1)[1].strip()
                     break
-            self.products.append({"name": name, "keywords": keywords, "ctx": text, "price": price})
+            self.products.append({"name": name, "keywords": keywords, "bigrams": bigrams, "ctx": text, "price": price})
 
     def match(self, text: str) -> dict | None:
         tl = (text or "").lower()
-        q_tokens = set(re.findall(r"\w+", tl, flags=re.UNICODE)) - _VI_STOPWORDS
-        if not q_tokens:
-            return None
-
+        q_raw_tokens = [t.lower() for t in re.findall(r"\w+", tl, flags=re.UNICODE)]
+        q_tokens = set(q_raw_tokens) - _VI_STOPWORDS
+        q_bigrams = {f"{q_raw_tokens[i]} {q_raw_tokens[i + 1]}" for i in range(len(q_raw_tokens) - 1)}
         best_prod = None
         best_score = 0
 
@@ -163,15 +179,17 @@ class ChatIntent:
             score = 0
             p_name_lower = prod["name"].lower()
             if p_name_lower in tl:
-                score += 100
-            matched_kws = prod["keywords"].intersection(q_tokens)
+                score += 150
+            matched_bigrams = prod.get("bigrams", set()).intersection(q_bigrams)
+            score += len(matched_bigrams) * 40
+            matched_kws = prod.get("keywords", set()).intersection(q_tokens)
             score += len(matched_kws) * 10
 
             if score > best_score:
                 best_score = score
                 best_prod = prod
 
-        return best_prod if best_score >= 10 else None
+        return best_prod if best_score >= 20 else None
 
     def answer(self, question: str) -> str | None:
         prod = self.match(question)

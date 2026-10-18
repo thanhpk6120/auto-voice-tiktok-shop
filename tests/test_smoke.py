@@ -73,10 +73,10 @@ def test_analyze_order_with_product_and_user_extraction():
     assert "Áo thun Polo" in res["speak_text"]
 
 def test_analyze_chat_priority_and_formatting():
-    ev_question = {"type": "chat", "user": "Mai Phương", "text": "Có ship Hà Nội không?"}
+    ev_question = {"type": "chat", "user": "Mai Phương", "text": "Hôm nay mấy giờ shop tắt live vậy?"}
     res1 = analyze(ev_question, use_batcher=False)
     assert res1["priority"] == 2
-    assert "Mai Phương hỏi: Có ship Hà Nội không?" in res1["speak_text"]
+    assert "Mai Phương hỏi: Hôm nay mấy giờ shop tắt live vậy?" in res1["speak_text"]
 
     ev_comment = {"type": "chat", "user": "Tuấn", "text": "Hôm nay vui vẻ nhé cả nhà"}
     res2 = analyze(ev_comment, use_batcher=False)

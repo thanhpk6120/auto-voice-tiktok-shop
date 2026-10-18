@@ -93,6 +93,14 @@ def clean_speak_text(text: str, max_words: int = 45) -> str:
         body = " ".join(words[:max_words]).rstrip(",;:") + "."
     return body
 
+_VI_STOPWORDS = {
+    "ăn", "vặt", "đồ", "nhẹ", "món", "sản", "phẩm", "hàng", "loại", "giá",
+    "deal", "túi", "hộp", "shop", "tiền", "bịch", "gói", "cho", "của", "và",
+    "các", "những", "này", "kia", "đó", "với", "rất", "thực", "phẩm", "khô",
+    "tặng", "mua", "bán", "1kg", "500g", "250g", "food", "snack",
+    "nhà", "ơi", "ạ", "nhé", "hôm", "nay", "mình", "bạn", "em", "anh", "chị", "thế", "nào"
+}
+
 
 class ChatIntent:
     """Detect câu hỏi về SP từ context-data/*.md và trả lời RAG."""
@@ -133,7 +141,7 @@ class ChatIntent:
             if not name:
                 continue
             tokens = [t.lower() for t in re.findall(r"\w+", name, flags=re.UNICODE)]
-            keywords = {t for t in tokens if len(t) >= 2}
+            keywords = {t for t in tokens if len(t) >= 2 and t not in _VI_STOPWORDS}
             price = ""
             for line in text.splitlines():
                 line = line.strip()
@@ -144,13 +152,26 @@ class ChatIntent:
 
     def match(self, text: str) -> dict | None:
         tl = (text or "").lower()
+        q_tokens = set(re.findall(r"\w+", tl, flags=re.UNICODE)) - _VI_STOPWORDS
+        if not q_tokens:
+            return None
+
+        best_prod = None
+        best_score = 0
+
         for prod in self.products:
-            if prod["name"].lower() in tl:
-                return prod
-            for kw in prod["keywords"]:
-                if kw and kw in tl:
-                    return prod
-        return None
+            score = 0
+            p_name_lower = prod["name"].lower()
+            if p_name_lower in tl:
+                score += 100
+            matched_kws = prod["keywords"].intersection(q_tokens)
+            score += len(matched_kws) * 10
+
+            if score > best_score:
+                best_score = score
+                best_prod = prod
+
+        return best_prod if best_score >= 10 else None
 
     def answer(self, question: str) -> str | None:
         prod = self.match(question)

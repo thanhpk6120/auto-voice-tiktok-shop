@@ -312,17 +312,7 @@ class ChatIntent:
         prod = self.match(question)
         if prod is None:
             return None
-        system = (
-            "Bạn là trợ lý bán hàng livestream TikTok Shop, chuyên sinh câu trả lời để tạo giọng đọc Text-To-Speech (TTS).\n"
-            "Quy tắc BẮT BUỘC để giọng đọc phát âm chuẩn và tự nhiên:\n"
-            "1. TOÀN BỘ câu trả lời PHẢI là tiếng Việt có dấu đầy đủ.\n"
-            "2. TUYỆT ĐỐI KHÔNG viết số dạng chữ số (0-9) hay ký hiệu tiền tệ (đ, ₫, k, %, /). BẮT BUỘC PHIÊN ÂM TOÀN BỘ THÀNH CHỮ TIẾNG VIỆT:\n"
-            "   - Ví dụ: 10000 đ -> 'mười nghìn đồng', 1₫ -> 'một đồng', 28.900₫ -> 'hai mươi tám nghìn chín trăm đồng', 1kg -> 'một cân' hoặc 'một ki-lô-gam', 99% -> 'chín mươi chín phần trăm'.\n"
-            "3. TẤT CẢ các từ tiếng Anh, từ mượn BẮT BUỘC PHIÊN ÂM SANG TIẾNG VIỆT CÓ DẤU:\n"
-            "   - Ví dụ: what's up -> 'goắt sắp', hello -> 'hê lô', sale -> 'sêu', live -> 'lai', snack -> 'xì-nách', deal -> 'điu', combo -> 'com-bô'.\n"
-            "4. Trả lời nhiệt tình, ngắn gọn dưới 35 từ, tập trung chốt đơn vào giỏ hàng.\n"
-            "5. Không dùng markdown, bullet, emoji, hay bất kỳ ký tự đặc biệt nào."
-        )
+        system = get_prompt("system_sales")
         user_prompt = f"Context: {prod['ctx']}\nCâu hỏi: {question}"
         try:
             try:
@@ -349,10 +339,80 @@ class ChatIntent:
 _DEFAULT_COOLDOWN: float = 3.0
 _DEFAULT_MAX_BATCH: int = 5
 _DEFAULT_MAX_WORDS: int = 45
+_PROMPTS_DIR: str = "prompts"
 _CONTEXT_DIR: str = "context-data"
 _MAX_BATCH: int = _DEFAULT_MAX_BATCH
 _MAX_WORDS: int = _DEFAULT_MAX_WORDS
 
+
+def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
+    """Đọc file prompt markdown từ prompts_dir theo tên. Fallback về prompt mặc định nếu thiếu."""
+    p_dir = Path(prompts_dir or _PROMPTS_DIR)
+    try:
+        import settings
+        resolved = settings.resolve_path(p_dir)
+    except Exception:
+        resolved = _project_root() / p_dir
+
+    target_file = resolved / f"{name}.md"
+    if target_file.is_file():
+        try:
+            content = target_file.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+        except Exception:
+            pass
+
+    # Fallback built-in prompts
+    if name == "system_sales":
+        return (
+            "Bạn là trợ lý bán hàng livestream TikTok Shop, chuyên sinh câu trả lời tư vấn sản phẩm để tạo giọng đọc Text-To-Speech (TTS).\n"
+            "Quy tắc bắt buộc:\n"
+            "1. TOÀN BỘ câu trả lời PHẢI là tiếng Việt có dấu đầy đủ.\n"
+            "2. TUYỆT ĐỐI KHÔNG viết số dạng chữ số hay ký hiệu tiền tệ. BẮT BUỘC PHIÊN ÂM TOÀN BỘ THÀNH CHỮ TIẾNG VIỆT (ví dụ: 1₫ -> 'một đồng', 28.900₫ -> 'hai mươi tám nghìn chín trăm đồng', 1kg -> 'một cân').\n"
+            "3. TẤT CẢ từ tiếng Anh, từ mượn BẮT BUỘC PHIÊN ÂM (live -> lai, shop -> sóp, deal -> điu, snack -> xì-nách).\n"
+            "4. Trả lời nhiệt tình, ngắn gọn dưới 35 từ, tập trung chốt đơn vào giỏ hàng.\n"
+            "5. Không dùng markdown, bullet, emoji."
+        )
+    elif name == "system_chat":
+        return (
+            "Bạn là streamer bán hàng livestream TikTok Shop thân thiện, năng động, dễ thương.\n"
+            "Khách xem live vừa bình luận trong khung chat. Hãy đáp lại khách thật tự nhiên như đang nói trực tiếp trên livestream.\n"
+            "Quy tắc:\n"
+            "1. Luôn xưng hô tên khách một cách thân thiết (ví dụ: 'Chào {user}', 'Dạ {user} ơi').\n"
+            "2. Trả lời tự nhiên, ngắn gọn dưới 25 từ, hướng khách xem giỏ hàng hoặc tương tác.\n"
+            "3. Toàn bộ là tiếng Việt có dấu, không emoji, không viết số, phiên âm từ tiếng Anh sang tiếng Việt (shop -> sóp, live -> lai)."
+        )
+    elif name == "system_batch":
+        return (
+            "Bạn là hệ thống AI điều khiển giọng đọc livestream TikTok Shop tự động.\n"
+            "Dưới đây là danh sách các sự kiện diễn ra trong 5 giây vừa qua kèm thông tin sản phẩm.\n"
+            "Nhiệm vụ: Phân tích và sinh ra danh sách câu nói ngắn gọn để tạo giọng đọc.\n"
+            "BẮT BUỘC CHỈ TRẢ VỀ DUY NHẤT 1 MẢNG JSON HỢP LỆ:\n"
+            "[\n"
+            "  {\"type\": \"order|sales|chat|greeting\", \"user\": \"Tên\", \"text\": \"Câu thoại tiếng Việt có dấu, phiên âm 100% số và tiếng Anh\", \"priority\": 1|2|3}\n"
+            "]\n"
+            "Tuyệt đối không thêm bất kỳ văn bản nào ngoài JSON!"
+        )
+    return ""
+
+
+def configure(prompts_dir=None, context_dir=None, cooldown=None, max_batch=None, max_words=None) -> None:
+    """Ap cau hinh runtime; tham so None giu gia tri hien tai."""
+    global _PROMPTS_DIR, _CONTEXT_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
+    if prompts_dir is not None:
+        _PROMPTS_DIR = str(prompts_dir)
+    if context_dir is not None:
+        _CONTEXT_DIR = str(context_dir)
+        _intent = None
+    if max_batch is not None:
+        _MAX_BATCH = max(1, int(max_batch))
+    if max_words is not None:
+        _MAX_WORDS = max(1, int(max_words))
+    _batcher = GreetingBatcher(
+        cooldown=_DEFAULT_COOLDOWN if cooldown is None else float(cooldown),
+        max_batch=_MAX_BATCH,
+    )
 _intent: ChatIntent | None = None
 _batcher: GreetingBatcher | None = None
 
@@ -412,14 +472,9 @@ def answer_general_chat(user: str, text: str) -> str:
         return phoneticize_vietnamese(random.choice(fast_replies))
 
     # 2. Các bình luận giao tiếp khác -> gọi LLM đóng vai streamer đáp lại tự nhiên
-    system = (
-        "Bạn là streamer bán hàng livestream TikTok Shop thân thiện, năng động, dễ thương.\n"
-        "Khách xem live vừa bình luận trong khung chat. Hãy đáp lại khách thật tự nhiên như đang nói trực tiếp trên livestream.\n"
-        "Quy tắc:\n"
-        f"1. Luôn xưng hô tên khách '{u}' một cách thân thiết (ví dụ: 'Chào {u}', 'Dạ {u} ơi').\n"
-        "2. Trả lời tự nhiên, ngắn gọn dưới 25 từ, hướng khách xem giỏ hàng hoặc tương tác.\n"
-        "3. Toàn bộ là tiếng Việt có dấu, không emoji, không viết số, phiên âm từ tiếng Anh sang tiếng Việt (shop -> sóp, live -> lai)."
-    )
+    system = get_prompt("system_chat")
+    if "{user}" in system or "{u}" in system:
+        system = system.replace("{user}", u).replace("{u}", u)
     user_prompt = f"Khách tên: {u}\nBình luận: {text}"
     try:
         try:

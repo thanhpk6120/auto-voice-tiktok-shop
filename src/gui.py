@@ -295,7 +295,7 @@ class _Field:
         if self.secret:
             self.btn = ttk.Button(parent, text="Hiện", width=6, command=self.toggle_secret)
             self.btn.grid(row=row, column=2, padx=4)
-        elif self.key in ("gologin_dir", "gologin_profiles_dir"):
+        elif self.key in ("gologin_dir", "gologin_profiles_dir", "prompts_dir", "context_dir", "out_dir"):
             btn = ttk.Button(
                 parent,
                 text="Chọn thư mục...",

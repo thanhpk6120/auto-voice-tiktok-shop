@@ -46,12 +46,14 @@ DEFAULTS: dict = {
     "no_play": False,
     "interrupt_mode": "finish",
     # Analyzer
+    "prompts_dir": "prompts",
     "context_dir": "context-data",
+    "batch_window_s": 5.0,
+    "batch_max_events": 10,
     "out_dir": "out",
     "greeting_cooldown_s": 3.0,
     "greeting_max_batch": 5,
     "sales_max_words": 35,
-    # Browser & GoLogin
     "gologin_dir": "gologin-basic-offline",
     "gologin_profiles_dir": "",
     "gologin_active_version": "",
@@ -72,10 +74,13 @@ SECTIONS: dict = {
     ],
     "Event Bridge": ["bridge_url", "bridge_port"],
     "Audio & Analyzer": [
+        "prompts_dir",
+        "context_dir",
+        "batch_window_s",
+        "batch_max_events",
         "audio_device",
         "no_play",
         "interrupt_mode",
-        "context_dir",
         "out_dir",
         "greeting_cooldown_s",
         "greeting_max_batch",
@@ -262,6 +267,10 @@ def apply(cfg: dict | None = None) -> dict:
             _mod.LLM_MODEL = str(cfg["llm_model"])
             _mod.LLM_API_KEY = str(cfg["llm_api_key"])
             _mod.LLM_TIMEOUT_S = float(cfg["llm_timeout_s"])
+            _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))
+            _mod.CONTEXT_DIR = str(cfg.get("context_dir", "context-data"))
+            _mod.BATCH_WINDOW_S = float(cfg.get("batch_window_s", 5.0))
+            _mod.BATCH_MAX_EVENTS = int(cfg.get("batch_max_events", 10))
         except Exception:
             pass
 
@@ -273,7 +282,8 @@ def apply(cfg: dict | None = None) -> dict:
         import event_analyzer  # type: ignore
 
         event_analyzer.configure(
-            context_dir=cfg["context_dir"],
+            prompts_dir=cfg.get("prompts_dir", "prompts"),
+            context_dir=cfg.get("context_dir", "context-data"),
             cooldown=float(cfg["greeting_cooldown_s"]),
             max_batch=int(cfg["greeting_max_batch"]),
             max_words=int(cfg["sales_max_words"]),

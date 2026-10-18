@@ -26,6 +26,7 @@ import event_bridge as bridge_mod
 import tts_client
 from audio_queue import PriorityAudioQueue
 from event_analyzer import analyze, get_batcher
+from batch_processor import BatchEventCollector, process_event_batch
 from event_simulator import iter_events
 from tts_client import synthesize
 
@@ -113,65 +114,109 @@ def handle_run(args) -> int:
     stop_event = threading.Event()
     stats = {"spoke": 0, "tts_ok": 0, "tts_fail": 0, "lat_ms": []}
 
+    batch_window_s = float(
+        getattr(args, "batch_window_s", None)
+        if getattr(args, "batch_window_s", None) is not None
+        else os.getenv("BATCH_WINDOW_S", "5.0")
+    )
+    batch_max_events = int(
+        getattr(args, "batch_max_events", None)
+        if getattr(args, "batch_max_events", None) is not None
+        else os.getenv("BATCH_MAX_EVENTS", "10")
+    )
+    use_batch = batch_window_s > 0
+
+    collector = BatchEventCollector()
+
+    def batch_worker():
+        while not stop_event.is_set():
+            time.sleep(batch_window_s)
+            evs = collector.drain()
+            if not evs:
+                continue  # Không có sự kiện mới -> KHÔNG gọi LLM
+            print(f"[run/batch] Gom {len(evs)} sự kiện trong {batch_window_s}s -> gửi AI LLM", flush=True)
+            try:
+                items = process_event_batch(evs, max_events=batch_max_events)
+                for it in items:
+                    txt = it.get("text", "")
+                    if not txt:
+                        continue
+                    wav = synthesize(txt)
+                    prio = int(it.get("priority", 2))
+                    k = str(it.get("type", "chat"))
+                    queue.put(k, prio, txt, wav)
+                    stats["spoke"] += 1
+                    if tts_client.VOICESTUDIO_OK:
+                        stats["tts_ok"] += 1
+                    else:
+                        stats["tts_fail"] += 1
+                    stats["lat_ms"].append(tts_client.last_latency_ms())
+                    print(
+                        f"[run/batch] event={k} ({it.get('user', 'Khách')}) -> speak_text='{txt}' "
+                        f"-> wav={wav.name} -> priority={prio} -> queue-size={queue.qsize()}"
+                        f"{' [no-play]' if no_play else ''}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[run/batch] lỗi xử lý batch: {e}", flush=True)
+
+    if use_batch:
+        b_thread = threading.Thread(target=batch_worker, daemon=True, name="batch-processor")
+        b_thread.start()
+
     def worker(ev: dict) -> None:
         spoke = False
         try:
             spoke = process_event(ev, queue, no_play)
             if spoke:
                 stats["spoke"] += 1
-        except Exception as e:  # 1 event loi khong duoc giet vong lap
+        except Exception as e:
             print(f"[run] event error: {type(e).__name__}: {e}", flush=True)
         if not spoke:
-            return  # join gop batch: khong goi TTS -> khong tinh latency
+            return
         if tts_client.VOICESTUDIO_OK:
             stats["tts_ok"] += 1
         else:
             stats["tts_fail"] += 1
         stats["lat_ms"].append(tts_client.last_latency_ms())
 
-    def batcher_ticker():
-        batcher = get_batcher()
-        while not stop_event.is_set():
-            time.sleep(0.5)
-            try:
-                batched = batcher.check_timeout()
-                if batched:
-                    wav = synthesize(batched)
-                    queue.put("greeting", 3, batched, wav)
-                    stats["spoke"] += 1
-                    print(
-                        f"event=join(timeout_flush) -> speak_text='{batched}' "
-                        f"-> wav={wav.name} -> priority=3 -> queue-size={queue.qsize()}"
-                        f"{' [no-play]' if no_play else ''}",
-                        flush=True,
-                    )
-            except Exception as e:
-                print(f"[run] batcher flush error: {e}", flush=True)
-
-    ticker_thread = threading.Thread(target=batcher_ticker, daemon=True, name="greeting-ticker")
-    ticker_thread.start()
     print(
-        f"[run] bat dau (no_play={no_play}, interrupt_mode={interrupt_mode}, "
-        f"seconds={args.seconds or 'vo han'}). Ctrl+C de dung."
+        f"[run] bắt đầu (no_play={no_play}, batch={batch_window_s}s, interrupt_mode={interrupt_mode}, "
+        f"seconds={args.seconds or 'vô hạn'}). Ctrl+C để dừng."
     )
     t0 = time.monotonic()
-    received = 0  # dem o vong lap nhan: stats do worker tang nen bi tre
+    received = 0
     try:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="event-proc") as pool:
             for ev in _stream_events(args, stop_event):
-                pool.submit(worker, ev)
-                received += 1
+                if use_batch:
+                    collector.add(ev)
+                    received += 1
+                else:
+                    pool.submit(worker, ev)
+                    received += 1
                 if args.seconds and (time.monotonic() - t0) >= args.seconds:
                     break
                 if args.max_events and received >= args.max_events:
                     break
     except KeyboardInterrupt:
-        print("\n[run] Ctrl+C -> dung")
+        print("\n[run] Ctrl+C -> dừng")
     except Exception as e:
-        print(f"[run] nguon event loi: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"[run] nguồn event lỗi: {type(e).__name__}: {e}", file=sys.stderr)
         stop_event.set()
 
     stop_event.set()
+    if use_batch:
+        remaining = collector.drain()
+        if remaining:
+            try:
+                items = process_event_batch(remaining, max_events=batch_max_events)
+                for it in items:
+                    txt = it.get("text", "")
+                    if txt:
+                        queue.put(str(it.get("type", "chat")), int(it.get("priority", 2)), txt, synthesize(txt))
+            except Exception:
+                pass
     # Flush batch chao con lai
     try:
         batched = get_batcher().flush()
@@ -310,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run.add_argument("--browser-mode", choices=["extension", "gologin_cdp"], default=None, help="Che do ket noi trinh duyet (extension hoac gologin_cdp)")
     p_run.add_argument("--cdp-port", type=int, default=30899, help="Cong CDP remote debugging (mac dinh 30899)")
+    p_run.add_argument("--batch-window-s", type=float, default=None, help="Cửa sổ gom sự kiện (giây, mặc định 5.0)")
+    p_run.add_argument("--batch-max-events", type=int, default=None, help="Số sự kiện tối đa mỗi batch (mặc định 10)")
     p_doc = subparsers.add_parser("doctor", help="Chan doan VoiceStudio / LLM / loa / bridge / hang doi")
     p_doc.add_argument("--bridge", default=DEFAULT_BRIDGE)
     p_doc.add_argument("--window", type=float, default=2.0, help="So giay nghe event tu bridge")

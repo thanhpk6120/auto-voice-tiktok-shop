@@ -47,7 +47,7 @@ def _rmtree(path: Path) -> None:
 def copy_runtime_files(dist: Path) -> list[str]:
     """Copy data nguoi dung co the sua + config mau ra canh .exe."""
     copied: list[str] = []
-    for name in ("context-data", "ui"):
+    for name in ("context-data", "prompts", "ui"):
         src = ROOT / name
         if not src.is_dir():
             continue

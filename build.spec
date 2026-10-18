@@ -18,6 +18,7 @@ ROOT = Path(SPECPATH).resolve()
 datas = [
     # Read-only data di kem: bo nao RAG + dashboard test tay.
     (str(ROOT / "context-data"), "context-data"),
+    (str(ROOT / "prompts"), "prompts"),
     (str(ROOT / "ui"), "ui"),
     (str(ROOT / "requirements.txt"), "."),
     # sounddevice: data (_sounddevice_data) do hook cua pyinstaller-hooks-contrib lo,
@@ -54,7 +55,9 @@ hiddenimports = [
     "llm_client",
     "tts_client",
     "browser_manager",
+    "batch_processor",
 ]
+
 excludes = [
     "gologin-basic-offline",
     "vendor",

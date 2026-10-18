@@ -37,5 +37,9 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://192.168.1.68:20130/v1").rstrip(
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-5")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "20"))
+PROMPTS_DIR = os.getenv("PROMPTS_DIR", "prompts")
+CONTEXT_DIR = os.getenv("CONTEXT_DIR", "context-data")
+BATCH_WINDOW_S = float(os.getenv("BATCH_WINDOW_S", "5.0"))
+BATCH_MAX_EVENTS = int(os.getenv("BATCH_MAX_EVENTS", "10"))
 
 # ponytail: minimal config reader; replace with pydantic-settings when validation needed

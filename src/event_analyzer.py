@@ -31,6 +31,13 @@ class GreetingBatcher:
         if len(self._users) >= self.max_batch:
             return self.flush()
         return None
+    def check_timeout(self) -> str | None:
+        """Nếu cửa sổ cooldown đã qua và có người đang chờ, flush ngay."""
+        now = time.monotonic()
+        if self._window_start is not None and self._users:
+            if now - self._window_start >= self.cooldown:
+                return self.flush()
+        return None
 
     def flush(self) -> str | None:
         if not self._users:
@@ -232,17 +239,49 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
         return {"kind": "greeting", "priority": 3, "speak_text": f"{template} {user}!"}
 
     if typ in ("chat", "comment", "message"):
-        text = str(ev.get("text") or ev.get("message") or ev.get("content") or "")
+        text = str(ev.get("text") or ev.get("message") or ev.get("content") or "").strip()
         ans = _get_intent().answer(text)
         if ans is not None:
             return {"kind": "sales", "priority": 2, "speak_text": ans}
-        return {"kind": "chat", "priority": 3, "speak_text": text}
+        if user and user not in ("Khách", "bạn mới"):
+            if "?" in text or any(w in text.lower() for w in ("không", "sao", "nào", "bao nhiêu", "được không", "gì")):
+                speak = f"{user} hỏi: {text}"
+            else:
+                speak = f"{user} bình luận: {text}"
+        else:
+            speak = text
+        return {"kind": "chat", "priority": 2, "speak_text": speak}
 
     if typ == "gift":
         gift = ev.get("gift") or ev.get("gift_name") or "quà"
-        return {"kind": "gift", "priority": 1, "speak_text": f"Cảm ơn {user} đã tặng {gift}!"}
+        count = ev.get("count") or ev.get("quantity") or 1
+        raw_text = str(ev.get("text") or ev.get("raw") or ev.get("content") or "").strip()
+        if (not user or user in ("Khách", "bạn mới")) and raw_text:
+            m = re.search(r"([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đã tặng|gửi tặng|tặng)", raw_text, re.I)
+            if m:
+                user = m.group(1).strip()
+        try:
+            count_int = int(count)
+        except (ValueError, TypeError):
+            count_int = 1
+        gift_str = f"{count_int} {gift}" if count_int > 1 else str(gift)
+        return {"kind": "gift", "priority": 1, "speak_text": f"Cảm ơn {user} đã tặng {gift_str}!"}
 
     if typ == "order":
+        product = ev.get("product") or ev.get("product_name") or ev.get("item")
+        raw_text = str(ev.get("text") or ev.get("raw") or ev.get("content") or "").strip()
+        if (not user or user in ("Khách", "bạn mới")) and raw_text:
+            m = re.search(
+                r"(?:khách hàng|người mua)?\s*([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đã chốt đơn|đã đặt hàng|đã mua|chốt đơn)",
+                raw_text,
+                re.I,
+            )
+            if m:
+                user = m.group(1).strip()
+            rest = re.sub(r"^.*?(?:đã chốt đơn|đã đặt hàng|đã mua|chốt đơn)\s*", "", raw_text, flags=re.I).strip()
+            if rest and not product:
+                product = rest
+        if product:
+            return {"kind": "order", "priority": 1, "speak_text": f"Cảm ơn {user} đã chốt đơn {product}!"}
         return {"kind": "order", "priority": 1, "speak_text": f"Cảm ơn {user} đã chốt đơn!"}
-
     return {"kind": typ or "unknown", "priority": 3, "speak_text": str(ev.get("text") or "")}

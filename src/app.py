@@ -129,6 +129,27 @@ def handle_run(args) -> int:
             stats["tts_fail"] += 1
         stats["lat_ms"].append(tts_client.last_latency_ms())
 
+    def batcher_ticker():
+        batcher = get_batcher()
+        while not stop_event.is_set():
+            time.sleep(0.5)
+            try:
+                batched = batcher.check_timeout()
+                if batched:
+                    wav = synthesize(batched)
+                    queue.put("greeting", 3, batched, wav)
+                    stats["spoke"] += 1
+                    print(
+                        f"event=join(timeout_flush) -> speak_text='{batched}' "
+                        f"-> wav={wav.name} -> priority=3 -> queue-size={queue.qsize()}"
+                        f"{' [no-play]' if no_play else ''}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[run] batcher flush error: {e}", flush=True)
+
+    ticker_thread = threading.Thread(target=batcher_ticker, daemon=True, name="greeting-ticker")
+    ticker_thread.start()
     print(
         f"[run] bat dau (no_play={no_play}, interrupt_mode={interrupt_mode}, "
         f"seconds={args.seconds or 'vo han'}). Ctrl+C de dung."

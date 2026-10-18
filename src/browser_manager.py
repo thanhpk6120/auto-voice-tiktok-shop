@@ -25,7 +25,7 @@ from typing import Callable, Iterator
 
 # Mẫu hợp lệ cho tên phiên bản Chrome (chỉ cho phép số và dấu chấm)
 _VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+)*$")
-CDP_SETUP_JS = """
+CDP_SETUP_JS = r"""
 (() => {
     if (window.__tiktok_cdp_observers && Array.isArray(window.__tiktok_cdp_observers)) {
         for (const o of window.__tiktok_cdp_observers) {
@@ -161,11 +161,13 @@ CDP_SETUP_JS = """
                                 if (parts.length === 2 && parts[0].length < 30) {
                                     user = parts[0].trim();
                                     text = parts[1].trim();
+                                } else {
+                                    const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia)/i);
+                                    if (mJoin) { user = mJoin[1].trim(); text = raw; evType = 'join'; }
                                 }
                             }
                             if (isJunk(text)) continue;
-                            pushEvent('chat', user, text, 'Trò chuyện', raw);
-                        }
+                            pushEvent(evType, user, text, 'Trò chuyện', raw);
                     }
                 }
             });
@@ -201,6 +203,23 @@ CDP_SETUP_JS = """
                             if (parts.length === 2 && parts[0].length < 30) {
                                 user = parts[0].trim();
                                 text = parts[1].trim();
+                            } else {
+                                const mOrder = raw.match(/(?:khách hàng|người mua)?\s*([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đã chốt đơn|đã đặt hàng|ordered|đã mua)\s*(.*)/i);
+                                if (mOrder) {
+                                    user = mOrder[1].trim();
+                                    text = mOrder[2].trim() || raw;
+                                }
+                                const mGift = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đã tặng|gửi tặng)\s*(.*)/i);
+                                if (mGift) {
+                                    user = mGift[1].trim();
+                                    text = mGift[2].trim() || raw;
+                                }
+                                const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia)/i);
+                                if (mJoin) {
+                                    user = mJoin[1].trim();
+                                    text = raw;
+                                    evType = 'join';
+                                }
                             }
                             if (isJunk(text)) continue;
                             pushEvent(evType, user, text, 'Hoạt động', raw);
@@ -1062,15 +1081,33 @@ def stream_cdp_events(
 
                     for raw_ev in events:
                         if isinstance(raw_ev, dict):
+                            raw_str = raw_ev.get("raw", "")
+                            if raw_str:
+                                try:
+                                    classified = event_bridge.classify_line(raw_str)
+                                    if classified:
+                                        if classified.get("user") and classified["user"] != "Khách":
+                                            raw_ev["user"] = classified["user"]
+                                        if classified.get("product"):
+                                            raw_ev["product"] = classified["product"]
+                                        if classified.get("amount"):
+                                            raw_ev["amount"] = classified["amount"]
+                                        if classified.get("gift"):
+                                            raw_ev["gift"] = classified["gift"]
+                                            raw_ev["count"] = classified.get("count", 1)
+                                        if classified.get("type"):
+                                            raw_ev["type"] = classified["type"]
+                                except Exception:
+                                    pass
                             raw_ev.setdefault("text", raw_ev.get("content", ""))
                             src_lbl = raw_ev.get("source", "Trình duyệt")
                             usr = raw_ev.get("user", "Khách")
                             txt = raw_ev.get("text", "")
                             typ = raw_ev.get("type", "chat")
                             print(f"[cdp/fetch] Khung [{src_lbl}] ({typ}): {usr}: '{txt}'", flush=True)
-                        norm = event_bridge.normalize(raw_ev)
-                        if norm:
-                            yield norm
+                            norm = event_bridge.normalize(raw_ev)
+                            if norm:
+                                yield norm
                     time.sleep(poll_interval_s)
 
         except Exception:

@@ -76,9 +76,14 @@ def test_analyze_chat_priority_and_formatting():
     ev_question = {"type": "chat", "user": "Mai Phương", "text": "Hôm nay mấy giờ shop đóng cửa vậy?"}
     res1 = analyze(ev_question, use_batcher=False)
     assert res1["priority"] == 2
-    assert "Mai Phương hỏi: Hôm nay mấy giờ shop đóng cửa vậy?" in res1["speak_text"]
+    assert "Mai Phương" in res1["speak_text"]
 
     ev_comment = {"type": "chat", "user": "Tuấn", "text": "Hôm nay vui vẻ nhé cả nhà"}
     res2 = analyze(ev_comment, use_batcher=False)
     assert res2["priority"] == 2
-    assert "Tuấn bình luận: Hôm nay vui vẻ nhé cả nhà" in res2["speak_text"]
+    assert "Tuấn" in res2["speak_text"]
+
+    ev_alo = {"type": "chat", "user": "Thanh", "text": "Alo shop ơi"}
+    res_alo = analyze(ev_alo, use_batcher=False)
+    assert res_alo["priority"] == 2
+    assert "Thanh" in res_alo["speak_text"] and "sóp" in res_alo["speak_text"]

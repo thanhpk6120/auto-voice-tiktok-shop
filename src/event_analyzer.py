@@ -390,6 +390,54 @@ def get_batcher() -> GreetingBatcher:
     return _batcher
 
 
+def answer_general_chat(user: str, text: str) -> str:
+    """Tự động đáp lại các câu chào hỏi, gọi shop hoặc giao tiếp ngoài lề của người xem live."""
+    s = (text or "").lower().strip()
+    u = user if user and user not in ("Khách", "bạn mới") else "bạn"
+
+    # 1. Các câu chào hỏi / gọi shop phổ biến (alo, shop ơi, chào shop, hello shop...) -> đáp ngay lập tức
+    if (
+        re.search(
+            r"^(alo|a lô|a lo|hê lô|helo|hello|hi|chào|chao)?\s*(shop|sóp|sop|shop ơi|sóp ơi|ơi|oi)?\s*(\?|\!|\.)*$",
+            s,
+        )
+        or s in ("alo", "alo shop", "shop ơi", "sóp ơi", "chào shop", "hello shop", "hi shop", "có ai không")
+    ):
+        fast_replies = [
+            f"Chào {u}, sóp đây! Bạn đang ngắm món ăn vặt nào thế nè?",
+            f"Dạ sóp chào {u}, sóp nghe đây ạ! Bạn bấm giỏ hàng góc trái xem món ngon nhé!",
+            f"Chào {u}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
+            f"Chào {u}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
+        ]
+        return phoneticize_vietnamese(random.choice(fast_replies))
+
+    # 2. Các bình luận giao tiếp khác -> gọi LLM đóng vai streamer đáp lại tự nhiên
+    system = (
+        "Bạn là streamer bán hàng livestream TikTok Shop thân thiện, năng động, dễ thương.\n"
+        "Khách xem live vừa bình luận trong khung chat. Hãy đáp lại khách thật tự nhiên như đang nói trực tiếp trên livestream.\n"
+        "Quy tắc:\n"
+        f"1. Luôn xưng hô tên khách '{u}' một cách thân thiết (ví dụ: 'Chào {u}', 'Dạ {u} ơi').\n"
+        "2. Trả lời tự nhiên, ngắn gọn dưới 25 từ, hướng khách xem giỏ hàng hoặc tương tác.\n"
+        "3. Toàn bộ là tiếng Việt có dấu, không emoji, không viết số, phiên âm từ tiếng Anh sang tiếng Việt (shop -> sóp, live -> lai)."
+    )
+    user_prompt = f"Khách tên: {u}\nBình luận: {text}"
+    try:
+        try:
+            from src import llm_client as _llm
+        except Exception:
+            try:
+                from . import llm_client as _llm
+            except Exception:
+                import llm_client as _llm  # type: ignore
+        raw = _llm.chat(system, user_prompt)
+        reply = clean_speak_text(raw, max_words=30)
+        if reply:
+            return phoneticize_vietnamese(reply)
+    except Exception:
+        pass
+
+    return phoneticize_vietnamese(f"Chào {u}, sóp nghe đây ạ! Bạn bấm vào giỏ hàng góc trái xem các món ăn vặt ngon nhé!")
+
 def analyze(event: dict, use_batcher: bool = True) -> dict:
     """Map event -> {kind, priority, speak_text}."""
     ev = event or {}
@@ -410,14 +458,8 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
         ans = _get_intent().answer(text)
         if ans is not None:
             return {"kind": "sales", "priority": 2, "speak_text": ans}
-        if user and user not in ("Khách", "bạn mới"):
-            if "?" in text or any(w in text.lower() for w in ("không", "sao", "nào", "bao nhiêu", "được không", "gì")):
-                speak = f"{user} hỏi: {text}"
-            else:
-                speak = f"{user} bình luận: {text}"
-        else:
-            speak = text
-        return {"kind": "chat", "priority": 2, "speak_text": phoneticize_vietnamese(speak)}
+        speak = answer_general_chat(user, text)
+        return {"kind": "chat", "priority": 2, "speak_text": speak}
 
     if typ == "gift":
         gift = ev.get("gift") or ev.get("gift_name") or "quà"

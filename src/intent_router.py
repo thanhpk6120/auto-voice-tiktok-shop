@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 try:
     import json_utils
@@ -43,6 +44,21 @@ VALID_INTENTS = tuple(INTENT_PROMPTS.keys())
 
 # Lý do thất bại gần nhất của bước phân tích bằng AI (để chẩn đoán trong log/GUI).
 _LAST_ANALYZE_ERROR: str = ""
+
+# Backoff nhẹ khi model phân tích bị giới hạn tần suất (HTTP 429):
+# tạm bỏ qua AI trong vài giây để không dội thêm request vào server đang rate-limit.
+_RATE_LIMIT_COOLDOWN_S: float = 30.0
+_rate_limited_until: float = 0.0
+
+
+def _in_rate_limit_cooldown() -> bool:
+    """True nếu đang trong thời gian tạm hoãn gọi model phân tích do bị 429."""
+    return time.monotonic() < _rate_limited_until
+
+
+def rate_limit_remaining_s() -> float:
+    """Số giây còn lại của thời gian tạm hoãn gọi model phân tích (0 nếu không hoãn)."""
+    return max(0.0, _rate_limited_until - time.monotonic())
 
 
 def last_analyze_error() -> str:
@@ -103,7 +119,7 @@ def classify_intent(
     Trả về dict {"intent", "product_hint", "confidence", "source"}.
     `source` = "llm" hoặc "rule" (khi LLM lỗi/không cấu hình).
     """
-    global _LAST_ANALYZE_ERROR
+    global _LAST_ANALYZE_ERROR, _rate_limited_until
 
     raw = str(text or "").strip()
     if not raw:
@@ -116,6 +132,15 @@ def classify_intent(
         cfg_model = _analyst_model()
     if timeout is None:
         timeout = _analyst_timeout()
+
+    # Đang tạm hoãn do lần trước bị 429 -> dùng luật ngay, không dội thêm request
+    if cfg_model and _in_rate_limit_cooldown():
+        _LAST_ANALYZE_ERROR = (
+            f"tạm hoãn gọi model phân tích còn {rate_limit_remaining_s():.0f}s (do bị giới hạn tần suất)"
+        )
+        result = classify_intent_rules(raw)
+        result["error"] = _LAST_ANALYZE_ERROR
+        return result
 
     if cfg_model:
         try:
@@ -154,6 +179,9 @@ def classify_intent(
             _LAST_ANALYZE_ERROR = f"model trả về intent không hợp lệ: {data.get('intent')!r}"
         except Exception as e:
             _LAST_ANALYZE_ERROR = f"{type(e).__name__}: {e}"
+            # 429 -> tạm hoãn gọi AI một lúc (backoff nhẹ, không cache/retry phức tạp)
+            if "429" in str(e) or "rate" in type(e).__name__.lower():
+                _rate_limited_until = time.monotonic() + _RATE_LIMIT_COOLDOWN_S
 
     result = classify_intent_rules(raw)
     result["error"] = _LAST_ANALYZE_ERROR

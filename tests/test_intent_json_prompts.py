@@ -390,3 +390,84 @@ def test_builtin_prompt_fallback_is_only_json_and_diacritic():
     # Prompt sinh câu thoại phải ép tự xưng "sóp" để TTS đọc đúng vai streamer
     for name in ("system_greeting", "system_sales", "system_order", "system_gift", "system_chat"):
         assert "sóp" in get_prompt(name, prompts_dir="thu-muc-prompt-khong-ton-tai"), name
+
+
+# ----------------------------- batch: nhóm theo intent -----------------------------
+
+def test_group_events_by_intent_groups_by_type():
+    from batch_processor import group_events_by_intent
+
+    events = [
+        {"type": "order", "user": "A", "product": "Áo"},
+        {"type": "gift", "user": "B", "gift": "Hoa"},
+        {"type": "viewing_product", "user": "C", "product": "Kem"},
+        {"type": "join", "user": "D"},
+    ]
+    groups = group_events_by_intent(events)
+    assert set(groups) == {"order", "gift", "product_question", "greeting"}, set(groups)
+    assert len(groups["order"]) == 1
+    assert len(groups["gift"]) == 1
+    assert len(groups["product_question"]) == 1
+    assert len(groups["greeting"]) == 1
+
+
+def test_group_events_by_intent_classifies_chat_text():
+    from batch_processor import group_events_by_intent
+
+    settings_cache = None
+    try:
+        import settings
+        settings_cache = dict(settings.get())
+        settings._cache = dict(settings.DEFAULTS)
+        settings._cache["analyst_llm_model"] = ""   # offline: dùng luật từ khoá
+    except Exception:
+        pass
+    try:
+        groups = group_events_by_intent([
+            {"type": "chat", "user": "A", "text": "áo thun giá bao nhiêu shop"},
+            {"type": "chat", "user": "B", "text": "alo shop ơi"},
+            {"type": "chat", "user": "C", "text": "trời hôm nay đẹp ghê"},
+        ])
+        assert "product_question" in groups
+        assert "greeting" in groups
+        assert ("chat" in groups) or ("other" in groups)
+    finally:
+        if settings_cache is not None:
+            import settings
+            settings._cache = settings_cache
+
+
+def test_process_event_batch_fallback_local_without_llm():
+    """LLM lỗi toàn bộ lô -> xử lý cục bộ, vẫn ra câu thoại đúng vai (không raise)."""
+    import batch_processor as bp
+    from unittest import mock
+
+    def boom(*a, **k):
+        raise RuntimeError("LLM 429 simulated")
+
+    with mock.patch("llm_client.chat", side_effect=boom), \
+         mock.patch("src.llm_client.chat", side_effect=boom):
+        items = bp.process_event_batch([
+            {"type": "order", "user": "Đức Huy", "product": "Áo thun", "amount": 150000},
+            {"type": "gift", "user": "Trang", "gift": "Hoa hồng", "count": 1},
+            {"type": "join", "user": "Thanh"},
+        ], max_events=10)
+    assert items, "fallback phải trả ra câu thoại"
+    types = {it["type"] for it in items}
+    assert "order" in types and "gift" in types
+
+
+def test_rate_limit_backoff_avoids_immediate_retry():
+    """429 -> tạm hoãn gọi AI vài giây; trong cooldown thì dùng luật và ghi lý do."""
+    import intent_router as ir
+    import time as _time
+
+    old_until = ir._rate_limited_until
+    try:
+        ir._rate_limited_until = _time.monotonic() + 60.0
+        got = ir.classify_intent("alo shop ơi", products=[], model="openrouter/typesafe/jev-router")
+        assert got["source"] == "rule"
+        assert "hoãn" in got.get("error", "")
+        assert ir.rate_limit_remaining_s() > 0
+    finally:
+        ir._rate_limited_until = old_until

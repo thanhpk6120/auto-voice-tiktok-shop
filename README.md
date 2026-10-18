@@ -421,6 +421,23 @@ Tên file suy ra **từ tên sản phẩm** (`kem-duong-da-cap-am-water-gel.md`)
 
 Luồng: **bình luận → phân loại ý định → chọn đúng prompt → gọi LLM → đọc JSON**.
 
+Áp dụng cho **cả hai đường xử lý**:
+
+| Đường | Hàm | Cách dùng prompt |
+|---|---|---|
+| Xử lý từng sự kiện | `event_analyzer.analyze()` → `answer_by_intent()` | 1 sự kiện → 1 prompt theo ý định |
+| Xử lý theo lô (đường `app.py` chạy) | `batch_processor.process_event_batch()` | **nhóm sự kiện theo ý định**, mỗi nhóm gọi LLM 1 lần với prompt của nhóm đó |
+
+**Nhóm theo ý định không làm tăng số lời gọi LLM:** số lời gọi = số ý định *có mặt trong lô*
+(tối đa 6), không phải số sự kiện. Ví dụ lô 12 sự kiện gồm 3 order + 2 gift + 5 chat hỏi hàng
++ 2 join → chỉ **4 lời gọi** (`system_order`, `system_gift`, `system_sales`, `system_greeting`)
+thay vì 12.
+
+`group_events_by_intent()` ánh xạ: `order`→order, `gift`→gift, `join`→greeting,
+`viewing_product`→product_question (khách đang xem = quan tâm sản phẩm), `chat`→phân loại theo
+nội dung. Sau khi LLM trả về, `type` và `priority` được **ép lại theo nhóm** để LLM không hạ ưu tiên
+của đơn hàng/quà tặng.
+
 | Ý định | Prompt dùng | Ưu tiên |
 |---|---|---|
 | `greeting` | `system_greeting` | chat: 2, join: 3 |
@@ -434,6 +451,9 @@ Luồng: **bình luận → phân loại ý định → chọn đúng prompt →
   (`classify_intent_rules`).
 - Khi model phân tích lỗi (ví dụ gateway trả `429 Too Many Requests`), log ghi rõ lý do qua
   `intent_router.last_analyze_error()` và tự động chuyển sang luật dự phòng — không làm dừng phiên live.
+- Gặp `429` thì **tạm hoãn gọi model phân tích 30 giây** (`rate_limit_remaining_s()` cho biết còn bao lâu)
+  để không dội thêm request vào server đang giới hạn tần suất. Hết thời gian hoãn sẽ tự thử lại.
+  Đây là backoff nhẹ, không có tầng cache/retry phức tạp.
 - Câu hỏi sản phẩm: dò sản phẩm trong **context-live trước**, fallback **context-data**
   (`ChatIntent` đọc cả hai thư mục, sản phẩm từ context-live thắng khi hoà điểm).
 

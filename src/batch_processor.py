@@ -34,6 +34,11 @@ from event_analyzer import (
     ChatIntent,
 )
 
+try:
+    import intent_router as ir
+except ImportError:  # frozen/onedir: package phang
+    import intent_router as ir  # type: ignore[no-redef]
+
 
 def filter_batch_events(
     events: list[dict],
@@ -118,11 +123,28 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        raw_text_val = str(item.get("text") or "").strip()
+        # Prompt theo ý định trả khoá "speak_text"; prompt batch cũ trả "text".
+        # Đọc cả hai (và vài biến thể) để không mất câu thoại do LLM đổi tên khoá.
+        raw_text_val = str(
+            item.get("text")
+            or item.get("speak_text")
+            or item.get("speakText")
+            or item.get("noi_dung")
+            or ""
+        ).strip()
         if not raw_text_val:
             continue
 
-        item_type = str(item.get("type") or "chat").lower()
+        item_type = str(item.get("type") or item.get("kind") or "chat").lower()
+        # Chuẩn hoá tên loại: prompt theo ý định dùng "product_question",
+        # hệ thống âm thanh dùng "sales" -> map về đúng tên nội bộ.
+        item_type = {
+            "product_question": "sales",
+            "product": "sales",
+            "question": "sales",
+            "other": "chat",
+            "view": "viewing_product",
+        }.get(item_type, item_type)
         if item_type not in ("order", "gift", "sales", "chat", "greeting", "viewing_product", "remind"):
             item_type = "chat"
 
@@ -286,6 +308,55 @@ class BatchEventCollector:
         with self._lock:
             return bool(self._high_priority or self._latest_viewing)
 
+def group_events_by_intent(
+    events: list[dict],
+    products: list[dict] | None = None,
+) -> dict[str, list[dict]]:
+    """Nhóm sự kiện theo Ý DỊNH để gửi LLM với đúng loại prompt cho từng nhóm.
+
+    Nhóm giúp KHÔNG tăng số lần gọi LLM: mỗi intent có mặt trong lô chỉ cần
+    duy nhất 1 lời gọi với prompt tương ứng (system_greeting / system_sales /
+    system_order / system_gift / system_chat).
+
+    Trả về dict: intent -> danh sách sự kiện thuộc nhóm đó.
+    Chat/hoạt động phân loại bằng intent_router (model AI cấu hình `analyst_llm_model`,
+    lỗi/trễ thì tự động dùng luật từ khoá dự phòng).
+    """
+    out: dict[str, list[dict]] = {}
+    for ev in (events or []):
+        typ = str(ev.get("type") or ev.get("kind") or "chat").lower()
+        if typ in ("viewing_product", "viewing", "view_product", "xem_san_pham"):
+            intent = "product_question"          # đang xem sản phẩm = quan tâm sản phẩm
+        elif typ == "order":
+            intent = "order"
+        elif typ == "gift":
+            intent = "gift"
+        elif typ == "join":
+            intent = "greeting"
+        else:  # chat / comment / message / remind ... -> phân loại theo nội dung
+            text = str(ev.get("text") or ev.get("message") or ev.get("content") or "")
+            intent = (ir.classify_intent(text, products=products)).get("intent") or "other"
+        out.setdefault(intent, []).append(ev)
+    return out
+
+
+def _local_fallback_items(events: list[dict]) -> list[dict]:
+    """Dựng câu thoại cục bộ (không gọi LLM) cho một nhóm sự kiện khi LLM lỗi."""
+    items: list[dict] = []
+    for ev in (events or []):
+        res = analyze(ev, use_batcher=False)
+        spk = res.get("speak_text")
+        if not spk:
+            continue
+        items.append({
+            "type": res.get("kind", ev.get("type", "chat")),
+            "user": ev.get("user", "Khách"),
+            "text": spk,
+            "priority": int(res.get("priority", 2)),
+        })
+    return items
+
+
 def process_event_batch(
     events: list[dict],
     max_events: int = 10,
@@ -308,33 +379,22 @@ def process_event_batch(
     if not filtered_events and not joined_users:
         return []
 
-    # Chuẩn bị payload danh sách sự kiện gửi cho LLM
-    batch_payload: list[dict] = []
+    # Người vào phòng được gom thành 1 sự kiện chào chung (không nằm trong filtered_events)
+    join_event: dict | None = None
     if joined_users:
-        batch_payload.append({
+        names = ", ".join(joined_users[:6])
+        if len(joined_users) > 6:
+            names = f"{', '.join(joined_users[:5])} và {len(joined_users) - 5} người khác"
+        join_event = {
             "type": "join",
+            "user": names,
+            "text": f"{names} vừa vào phòng live",
             "users": joined_users,
-            "note": f"Có {len(joined_users)} người vừa vào phòng live"
-        })
-    for ev in filtered_events:
-        item = {
-            "type": ev.get("type", "chat"),
-            "user": ev.get("user", "Khách"),
-            "text": ev.get("text", ""),
         }
-        if ev.get("product"):
-            item["product"] = ev["product"]
-        if ev.get("gift"):
-            item["gift"] = ev["gift"]
-            item["count"] = ev.get("count", 1)
-        batch_payload.append(item)
 
-    # Đọc prompt hệ thống system_batch.md
-    system_prompt = get_prompt("system_batch", prompts_dir=prompts_dir)
-
-    # Thu thập ngữ cảnh sản phẩm từ context-data/*.md và context-live/*.md
+    # Đọc ngữ cảnh sản phẩm từ context-live + context-data
     intent = ChatIntent(context_dir, live_dir=context_live_dir) if context_dir is not None else _get_intent()
-    matched_products: list[str] = []
+    matched_products: list[dict] = []
     seen_prods: set[str] = set()
 
     for ev in filtered_events:
@@ -342,61 +402,83 @@ def process_event_batch(
         prod = intent.match(txt)
         if prod and prod["name"] not in seen_prods:
             seen_prods.add(prod["name"])
-            price_val = prod.get("price", "Liên hệ")
-            matched_products.append(f"- {prod['name']}: Giá {price_val}. Chi tiết: {prod.get('ctx', '')}")
-
+            matched_products.append(prod)
     if not matched_products and intent.products:
-        for p in intent.products[:5]:
-            matched_products.append(f"- {p['name']}: Giá {p.get('price', 'ưu đãi')}. Chi tiết: {p.get('ctx', '')[:300]}")
+        matched_products.extend(intent.products[:5])
 
-    context_str = "\n".join(matched_products) if matched_products else "Chưa có thông tin sản phẩm cụ thể."
+    # ===== Nhóm sự kiện theo Ý DỊNH rồi gọi LLM với ĐÚNG prompt cho từng nhóm =====
+    # Số lời gọi LLM <= số intent có mặt trong lô (không tăng theo số sự kiện).
+    events_for_grouping = list(filtered_events)
+    if join_event is not None:
+        events_for_grouping.append(join_event)   # -> nhóm "greeting"
+    grouped = group_events_by_intent(events_for_grouping, products=intent.products)
 
-    user_prompt = (
-        f"Thông tin các sản phẩm trên live:\n{context_str}\n\n"
-        f"Danh sách các sự kiện diễn ra trong 5 giây vừa qua:\n"
-        f"{json.dumps(batch_payload, ensure_ascii=False, indent=2)}\n\n"
-        f"BẮT BUỘC chỉ trả về 1 mảng JSON duy nhất. Không thêm bất kỳ văn bản nào ngoài JSON!"
-    )
+    all_items: list[dict] = []
+    for group_intent, group_events in grouped.items():
+        prompt_name = ir.prompt_for_intent(group_intent)
+        group_priority = {"order": 1, "gift": 1, "product_question": 2, "chat": 2}.get(group_intent, 3)
+        base_prompt = get_prompt(prompt_name, prompts_dir=prompts_dir)
+        system_prompt = ir.build_speak_prompt(base_prompt, group_intent, group_priority)
 
-    try:
+        group_payload: list[dict] = []
+        for ev in group_events:
+            item = {
+                "type": ev.get("type", ev.get("kind", group_intent)),
+                "user": ev.get("user", "Khách"),
+                "text": ev.get("text", ""),
+            }
+            if ev.get("product"):
+                item["product"] = ev["product"]
+            if ev.get("gift"):
+                item["gift"] = ev["gift"]
+                item["count"] = ev.get("count", 1)
+            group_payload.append(item)
+
+        ctx_str = "\n".join(
+            f"- Tên: {pp['name']} | Giá: {pp.get('price') or 'ưu đãi'} | Số thứ tự: {pp.get('index') or '-'}\n"
+            f"  Mô tả: {(pp.get('description') or (pp.get('ctx') or '')).strip()[:400]}"
+            for pp in matched_products[:5]
+        ) or "Chưa có thông tin sản phẩm cụ thể."
+        user_prompt = (
+            f"Ngữ cảnh sản phẩm trên live (context-live + context-data):\n{ctx_str}\n\n"
+            f"Nhóm ý định: {group_intent}\n"
+            f"Danh sách sự kiện thuộc nhóm này:\n"
+            f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
+            f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
+            f"dùng đúng các khoá: {{\"type\": \"{group_intent}\", \"user\": \"tên khách\", "
+            f"\"text\": \"câu thoại tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
+            f"Không thêm lời dẫn, không markdown, không ```json."
+        )
+
         try:
             from src import llm_client as _llm
         except Exception:
             try:
-                from . import llm_client as _llm
+                from . import llm_client as _llm  # type: ignore
             except Exception:
                 import llm_client as _llm  # type: ignore
 
-        raw_response = _llm.chat(system_prompt, user_prompt)
-        items = parse_llm_json_response(raw_response)
-        if items:
-            return items
-    except Exception as e:
-        print(f"[batch_processor] LLM batch lỗi ({e}), chuyển sang fallback cục bộ", flush=True)
+        try:
+            raw_response = _llm.chat(system_prompt, user_prompt)
+            items = parse_llm_json_response(raw_response)
+            if items:
+                # Ghi lại đúng loại/priority theo nhóm intent (LLM đôi khi nhầm)
+                for it in items:
+                    if group_intent == "product_question":
+                        it.setdefault("type", "sales")
+                    elif it.get("type") == "chat" and group_intent in ("order", "gift", "greeting"):
+                        it["type"] = {"order": "order", "gift": "gift", "greeting": "greeting"}[group_intent]
+                    # priority nhóm cao không thể thấp hơn ưu tiên nhóm
+                    if int(it.get("priority", 3)) > group_priority:
+                        it["priority"] = group_priority
+                all_items.extend(items)
+        except Exception as e:
+            print(f"[batch_processor] LLM nhóm '{group_intent}' lỗi ({e}), dùng fallback cục bộ", flush=True)
+            for fallback in _local_fallback_items(group_events):
+                all_items.append(fallback)
 
-    # Fallback xử lý cục bộ nếu LLM không trả JSON hoặc lỗi mạng
-    fallback_items: list[dict] = []
-    if joined_users:
-        if len(joined_users) <= 3:
-            names_str = ", ".join(joined_users)
-        else:
-            names_str = f"{', '.join(joined_users[:2])} và {len(joined_users) - 2} người khác"
-        fallback_items.append({
-            "type": "greeting",
-            "user": names_str,
-            "text": phoneticize_vietnamese(f"Xin chào {names_str} đã vào xem lai!"),
-            "priority": 3,
-        })
+    if all_items:
+        return all_items
 
-    for ev in filtered_events:
-        res = analyze(ev, use_batcher=False)
-        spk = res.get("speak_text")
-        if spk:
-            fallback_items.append({
-                "type": res.get("kind", ev.get("type", "chat")),
-                "user": ev.get("user", "Khách"),
-                "text": spk,
-                "priority": int(res.get("priority", 2)),
-            })
-
-    return fallback_items
+    # Fallback cuối cùng: toàn bộ lô đều lỗi -> xử lý cục bộ, không gọi LLM
+    return _local_fallback_items(events_for_grouping)

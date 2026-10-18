@@ -13,7 +13,7 @@ class GreetingBatcher:
     def __init__(self, cooldown: float = 3.0, max_batch: int = 5, templates: list[str] | None = None):
         self.cooldown = cooldown
         self.max_batch = max(1, int(max_batch))
-        self.templates = templates or ["Chào", "Hello", "Xin chào", "What'up"]
+        self.templates = templates or ["Chào", "Xin chào", "Hê-lô", "Goắt-sắp"]
         self._users: list[str] = []
         self._window_start: float | None = None
 
@@ -92,6 +92,123 @@ def clean_speak_text(text: str, max_words: int = 45) -> str:
     if len(words) > max_words:
         body = " ".join(words[:max_words]).rstrip(",;:") + "."
     return body
+
+_DIGITS_VI = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]
+
+
+def _read_3_digits(n: int, has_higher: bool = False) -> str:
+    tram = n // 100
+    chuc = (n % 100) // 10
+    donvi = n % 10
+    res = []
+    if tram > 0 or has_higher:
+        res.append(f"{_DIGITS_VI[tram]} trăm")
+    if chuc == 0:
+        if donvi > 0 and (tram > 0 or has_higher):
+            res.append("linh")
+    elif chuc == 1:
+        res.append("mười")
+    else:
+        res.append(f"{_DIGITS_VI[chuc]} mươi")
+
+    if chuc == 0 and donvi > 0:
+        res.append(_DIGITS_VI[donvi])
+    elif chuc == 1 and donvi == 1:
+        res.append("một")
+    elif chuc > 1 and donvi == 1:
+        res.append("mốt")
+    elif chuc > 0 and donvi == 5:
+        res.append("lăm")
+    elif chuc > 0 and donvi > 0 and donvi != 1 and donvi != 5:
+        res.append(_DIGITS_VI[donvi])
+    return " ".join(res)
+
+
+def num_to_vi_words(n: int) -> str:
+    """Chuyển số nguyên thành chữ tiếng Việt có dấu tự nhiên."""
+    if n == 0:
+        return "không"
+    units = ["", "nghìn", "triệu", "tỷ"]
+    groups = []
+    temp = abs(n)
+    while temp > 0:
+        groups.append(temp % 1000)
+        temp //= 1000
+    res = []
+    for i in range(len(groups) - 1, -1, -1):
+        g = groups[i]
+        if g > 0:
+            words = _read_3_digits(g, has_higher=(i < len(groups) - 1))
+            res.append(f"{words} {units[i]}".strip())
+    prefix = "âm " if n < 0 else ""
+    return prefix + " ".join(res).strip()
+
+
+_PHONETIC_DICT = [
+    (re.compile(r"\bwhat['’]?s?\s*up\b", re.I), "goắt sắp"),
+    (re.compile(r"\bhello\b", re.I), "hê lô"),
+    (re.compile(r"\bflash\s*sale\b", re.I), "phờ-lát sêu"),
+    (re.compile(r"\bsale\b", re.I), "sêu"),
+    (re.compile(r"\bfreeship\b", re.I), "miễn phí vận chuyển"),
+    (re.compile(r"\blivestream\b", re.I), "lai-sờ-trim"),
+    (re.compile(r"\blive\b", re.I), "lai"),
+    (re.compile(r"\bsnack\b", re.I), "xì-nách"),
+    (re.compile(r"\bcombo\b", re.I), "com-bô"),
+    (re.compile(r"\bdeal\b", re.I), "điu"),
+    (re.compile(r"\border\b", re.I), "chốt đơn"),
+    (re.compile(r"\bsize\b", re.I), "sai"),
+]
+
+
+def phoneticize_vietnamese(text: str) -> str:
+    """Phiên âm toàn bộ số, đơn vị tiền, từ tiếng Anh sang tiếng Việt có dấu chuẩn cho TTS."""
+    if not text:
+        return ""
+    res = str(text)
+    for pattern, repl in _PHONETIC_DICT:
+        res = pattern.sub(repl, res)
+
+    def _replace_currency_dong(m):
+        raw_num = m.group(1).replace(".", "").replace(",", "")
+        if raw_num.isdigit():
+            return num_to_vi_words(int(raw_num)) + " đồng"
+        return m.group(0)
+    res = re.sub(r"(\d[\d.,]*)\s*(?:đ|₫|VND|vnd|dong|đồng)", _replace_currency_dong, res)
+
+    def _replace_currency_k(m):
+        val = int(m.group(1)) * 1000
+        return num_to_vi_words(val) + " đồng"
+    res = re.sub(r"\b(\d+)\s*[kK]\b", _replace_currency_k, res)
+
+    def _replace_pct(m):
+        raw_num = m.group(1).replace(".", "").replace(",", "")
+        if raw_num.isdigit():
+            return num_to_vi_words(int(raw_num)) + " phần trăm"
+        return m.group(0)
+    res = re.sub(r"(\d[\d.,]*)\s*%", _replace_pct, res)
+
+    def _replace_kg(m):
+        raw_num = m.group(1).replace(".", "").replace(",", "")
+        if raw_num.isdigit():
+            return num_to_vi_words(int(raw_num)) + " ki-lô-gam"
+        return m.group(0)
+    res = re.sub(r"\b(\d[\d.,]*)\s*(?:kg|kí|cân)\b", _replace_kg, res, flags=re.I)
+
+    def _replace_gram(m):
+        raw_num = m.group(1).replace(".", "").replace(",", "")
+        if raw_num.isdigit():
+            return num_to_vi_words(int(raw_num)) + " gam"
+        return m.group(0)
+    res = re.sub(r"\b(\d[\d.,]*)\s*(?:g|gr|gram)\b", _replace_gram, res, flags=re.I)
+
+    def _replace_standalone_num(m):
+        raw_num = m.group(1)
+        if raw_num.isdigit() and len(raw_num) <= 6:
+            return num_to_vi_words(int(raw_num))
+        return m.group(0)
+    res = re.sub(r"\b(\d+)\b", _replace_standalone_num, res)
+
+    return re.sub(r"\s+", " ", res).strip()
 
 _VI_STOPWORDS = {
     # Danh từ / Định lượng chung
@@ -195,7 +312,17 @@ class ChatIntent:
         prod = self.match(question)
         if prod is None:
             return None
-        system = "Bạn là trợ lý bán hàng live, trả lời ≤35 từ tiếng Việt"
+        system = (
+            "Bạn là trợ lý bán hàng livestream TikTok Shop, chuyên sinh câu trả lời để tạo giọng đọc Text-To-Speech (TTS).\n"
+            "Quy tắc BẮT BUỘC để giọng đọc phát âm chuẩn và tự nhiên:\n"
+            "1. TOÀN BỘ câu trả lời PHẢI là tiếng Việt có dấu đầy đủ.\n"
+            "2. TUYỆT ĐỐI KHÔNG viết số dạng chữ số (0-9) hay ký hiệu tiền tệ (đ, ₫, k, %, /). BẮT BUỘC PHIÊN ÂM TOÀN BỘ THÀNH CHỮ TIẾNG VIỆT:\n"
+            "   - Ví dụ: 10000 đ -> 'mười nghìn đồng', 1₫ -> 'một đồng', 28.900₫ -> 'hai mươi tám nghìn chín trăm đồng', 1kg -> 'một cân' hoặc 'một ki-lô-gam', 99% -> 'chín mươi chín phần trăm'.\n"
+            "3. TẤT CẢ các từ tiếng Anh, từ mượn BẮT BUỘC PHIÊN ÂM SANG TIẾNG VIỆT CÓ DẤU:\n"
+            "   - Ví dụ: what's up -> 'goắt sắp', hello -> 'hê lô', sale -> 'sêu', live -> 'lai', snack -> 'xì-nách', deal -> 'điu', combo -> 'com-bô'.\n"
+            "4. Trả lời nhiệt tình, ngắn gọn dưới 35 từ, tập trung chốt đơn vào giỏ hàng.\n"
+            "5. Không dùng markdown, bullet, emoji, hay bất kỳ ký tự đặc biệt nào."
+        )
         user_prompt = f"Context: {prod['ctx']}\nCâu hỏi: {question}"
         try:
             try:
@@ -205,16 +332,17 @@ class ChatIntent:
                     from . import llm_client as _llm
                 except Exception:
                     import llm_client as _llm  # type: ignore
-            reply = clean_speak_text(_llm.chat(system, user_prompt), max_words=_MAX_WORDS)
+            raw_reply = _llm.chat(system, user_prompt)
+            reply = phoneticize_vietnamese(clean_speak_text(raw_reply, max_words=_MAX_WORDS))
             return reply or None
         except Exception:
             price_val = prod.get('price', '')
             if price_val:
-                price_display = price_val if ("đ" in price_val or "k" in price_val.lower()) else f"{price_val}đ"
+                price_display = phoneticize_vietnamese(price_val if ("đ" in price_val or "k" in price_val.lower() or "₫" in price_val) else f"{price_val} đồng")
                 price_str = f", giá {price_display}"
             else:
                 price_str = ", giá ưu đãi hôm nay"
-            return f"Dạ anh/chị ơi, {prod['name']} hiện shop vẫn còn hàng{price_str}, mình chốt đơn giúp shop nhé!"
+            return phoneticize_vietnamese(f"Dạ anh/chị ơi, {prod['name']} hiện shop vẫn còn hàng{price_str}, mình chốt đơn giúp shop nhé!")
 
 
 # Cau hinh runtime (settings.apply() ghi vao day)
@@ -274,8 +402,8 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             if batched_text:
                 return {"kind": "greeting", "priority": 3, "speak_text": batched_text}
             return {"kind": "greeting", "priority": 3, "speak_text": None}
-        template = random.choice(["Chào", "Hello", "Xin chào", "What'up"])
-        return {"kind": "greeting", "priority": 3, "speak_text": f"{template} {user}!"}
+        template = random.choice(["Chào", "Xin chào", "Hê-lô", "Goắt-sắp"])
+        return {"kind": "greeting", "priority": 3, "speak_text": phoneticize_vietnamese(f"{template} {user}!")}
 
     if typ in ("chat", "comment", "message"):
         text = str(ev.get("text") or ev.get("message") or ev.get("content") or "").strip()
@@ -289,7 +417,7 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
                 speak = f"{user} bình luận: {text}"
         else:
             speak = text
-        return {"kind": "chat", "priority": 2, "speak_text": speak}
+        return {"kind": "chat", "priority": 2, "speak_text": phoneticize_vietnamese(speak)}
 
     if typ == "gift":
         gift = ev.get("gift") or ev.get("gift_name") or "quà"
@@ -304,7 +432,7 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
         except (ValueError, TypeError):
             count_int = 1
         gift_str = f"{count_int} {gift}" if count_int > 1 else str(gift)
-        return {"kind": "gift", "priority": 1, "speak_text": f"Cảm ơn {user} đã tặng {gift_str}!"}
+        return {"kind": "gift", "priority": 1, "speak_text": phoneticize_vietnamese(f"Cảm ơn {user} đã tặng {gift_str}!")}
 
     if typ == "order":
         product = ev.get("product") or ev.get("product_name") or ev.get("item")
@@ -321,6 +449,6 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             if rest and not product:
                 product = rest
         if product:
-            return {"kind": "order", "priority": 1, "speak_text": f"Cảm ơn {user} đã chốt đơn {product}!"}
-        return {"kind": "order", "priority": 1, "speak_text": f"Cảm ơn {user} đã chốt đơn!"}
-    return {"kind": typ or "unknown", "priority": 3, "speak_text": str(ev.get("text") or "")}
+            return {"kind": "order", "priority": 1, "speak_text": phoneticize_vietnamese(f"Cảm ơn {user} đã chốt đơn {product}!")}
+        return {"kind": "order", "priority": 1, "speak_text": phoneticize_vietnamese(f"Cảm ơn {user} đã chốt đơn!")}
+    return {"kind": typ or "unknown", "priority": 3, "speak_text": phoneticize_vietnamese(str(ev.get("text") or ""))}

@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from event_analyzer import clean_speak_text  # noqa: E402
+from event_analyzer import clean_speak_text, phoneticize_vietnamese  # noqa: E402
 
 
 def test_strips_internal_note_lines():
@@ -43,3 +43,15 @@ def test_note_in_middle_line_is_dropped_but_others_kept():
     raw = "Dòng một.\nLưu ý: đừng đọc dòng này.\nDòng ba."
     assert "Lưu ý" not in clean_speak_text(raw)
     assert "Dòng một." in clean_speak_text(raw)
+
+
+def test_phoneticize_currency_and_numbers():
+    assert phoneticize_vietnamese("Giá 10000 đ") == "Giá mười nghìn đồng"
+    assert phoneticize_vietnamese("Deal chỉ 1₫ hôm nay") == "điu chỉ một đồng hôm nay"
+    assert phoneticize_vietnamese("Snack 28.900₫") == "xì-nách hai mươi tám nghìn chín trăm đồng"
+    assert phoneticize_vietnamese("Giảm 99% nhé") == "Giảm chín mươi chín phần trăm nhé"
+
+
+def test_phoneticize_english_loanwords():
+    assert phoneticize_vietnamese("hello cả nhà what's up") == "hê lô cả nhà goắt sắp"
+    assert phoneticize_vietnamese("Hôm nay flash sale và freeship 1kg") == "Hôm nay phờ-lát sêu và miễn phí vận chuyển một ki-lô-gam"

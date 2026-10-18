@@ -335,7 +335,7 @@ class ChatIntent:
             p_name_lower = prod["name"].lower()
 
             # Khớp theo số thứ tự giỏ hàng nếu câu hỏi nhắc đến mã/số (vd: "mã 1", "áo số 2", "sp 3")
-            idx_q = re.search(r"(?:mã|số|sản phẩm|sp)\s*#?(\d+)", tl)
+            idx_q = re.search(r"(?:m[aã]|s[oố]|sản phẩm|san pham|sp|item)\s*#?(\d+)", tl)
             if idx_q and prod.get("index") is not None:
                 if int(idx_q.group(1)) == prod["index"]:
                     score += 250

@@ -152,7 +152,12 @@ class BatchEventCollector:
       để tạo voice nhanh nhất có thể (không phải đợi hết batch_window_s).
     """
 
-    def __init__(self, max_join_history: int = 5):
+    def __init__(
+        self,
+        max_join_history: int = 5,
+        max_high_priority: int = 20,
+        on_event=None,
+    ):
         self._lock = threading.Lock()
         self._high_priority: list[dict] = []
         self._latest_joins: list[str] = []
@@ -160,6 +165,12 @@ class BatchEventCollector:
         self._other_activities: list[dict] = []
         self._event_trigger = threading.Event()
         self._max_join_history = max_join_history
+        self._max_high_priority = max(1, int(max_high_priority))
+        self._on_event = on_event
+
+    def wake(self) -> None:
+        """Danh thuc worker dang cho (vd: vua phat xong audio, co su kien moi cho san)."""
+        self._event_trigger.set()
 
     def add(self, event: dict) -> None:
         if not event or not isinstance(event, dict):
@@ -167,16 +178,27 @@ class BatchEventCollector:
         typ = str(event.get("type") or event.get("kind") or "").lower()
         usr = str(event.get("user") or event.get("username") or "Khách").strip()
 
+        notify = False
         with self._lock:
             if typ in ("order", "gift"):
+                # De len ban cu cung (loai, nguoi dung): chi giu su kien moi nhat
+                self._high_priority = [
+                    e for e in self._high_priority
+                    if not (e.get("type") == typ and e.get("user") == usr)
+                ]
                 self._high_priority.append(dict(event))
-                self._event_trigger.set()
+                notify = True
             elif typ in ("viewing_product", "viewing", "view_product", "xem_san_pham"):
-                self._latest_viewing[usr] = dict(event)
-                self._event_trigger.set()
+                self._latest_viewing[usr] = dict(event)   # ghi de theo tung user
+                notify = True
             elif typ in ("chat", "comment", "message"):
+                # Chat: de len ban cu cua cung nguoi dung, giu cau moi nhat
+                self._high_priority = [
+                    e for e in self._high_priority
+                    if not (e.get("type") in ("chat", "comment", "message") and e.get("user") == usr)
+                ]
                 self._high_priority.append(dict(event))
-                self._event_trigger.set()
+                notify = True
             elif typ in ("join", "joined", "greeting"):
                 if usr and usr not in ("Khách", "bạn mới"):
                     if usr in self._latest_joins:
@@ -186,6 +208,28 @@ class BatchEventCollector:
                         self._latest_joins.pop(0)
             else:
                 self._other_activities = [dict(event)]
+
+            self._enforce_cap_locked()
+
+        if notify:
+            self._event_trigger.set()
+            if self._on_event is not None:
+                try:
+                    self._on_event()
+                except Exception:
+                    pass
+
+    def _enforce_cap_locked(self) -> None:
+        """Chan tran bo nho (goi khi da giu lock): giu 100% order/gift, cat bot phan con lai."""
+        limit = self._max_high_priority
+        if len(self._high_priority) <= limit:
+            return
+        keep: list[dict] = []
+        tail: list[dict] = []
+        for e in self._high_priority:
+            (keep if e.get("type") in ("order", "gift") else tail).append(e)
+        room = max(0, limit - len(keep))
+        self._high_priority = (keep[:limit] + (tail[-room:] if room else []))
 
     def wait_for_batch(self, timeout: float = 5.0) -> bool:
         """Chờ sự kiện: nếu có sự kiện ưu tiên cao thì thức dậy ngay (fast-track),
@@ -198,6 +242,9 @@ class BatchEventCollector:
     def drain(self) -> list[dict]:
         """Lấy toàn bộ sự kiện mới nhất và giải phóng bộ nhớ ngay lập tức."""
         with self._lock:
+            # Clear TRUOC khi doc: su kien den sau thoi diem nay se set lai trigger
+            # -> khong bi mat tin hieu danh thuc (lost wakeup).
+            self._event_trigger.clear()
             events: list[dict] = []
             events.extend(self._high_priority)
             self._high_priority.clear()
@@ -213,7 +260,6 @@ class BatchEventCollector:
             events.extend(self._other_activities)
             self._other_activities.clear()
 
-            self._event_trigger.clear()
             return events
 
     def drain_latest(self) -> list[dict]:

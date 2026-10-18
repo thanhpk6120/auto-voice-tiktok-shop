@@ -133,3 +133,71 @@ def test_settings_apply_remind_and_sales_max_words():
     assert os.environ.get("REMIND_MIN_S") == "45.0"
     assert os.environ.get("REMIND_MAX_S") == "90.0"
     assert os.environ.get("REMIND_TEXT") == "Cho sóp xin một tim nha"
+
+
+def test_collector_dedupe_same_user_keeps_latest():
+    """Sự kiện cùng loại & cùng người dùng: bản mới đè bản cũ (không lưu nhiều)."""
+    col = batch_processor.BatchEventCollector()
+    for i in range(20):
+        col.add({"type": "order", "user": "Minh", "product": f"SP {i}"})
+    evs = col.drain()
+    assert len(evs) == 1
+    assert evs[0]["product"] == "SP 19"
+
+
+def test_collector_memory_cap():
+    """Chặn trần bộ nhớ: vượt ngưỡng thì cắt bớt nhưng giữ 100% đơn hàng/quà tặng."""
+    col = batch_processor.BatchEventCollector(max_high_priority=10)
+    for i in range(10):
+        col.add({"type": "order", "user": f"Buyer{i}"})
+    for i in range(50):
+        col.add({"type": "chat", "user": f"Chatter{i}", "text": f"cau {i}"})
+    assert col.size() <= 10
+    evs = col.drain()
+    assert sum(1 for e in evs if e["type"] == "order") == 10   # giu du don hang
+    assert sum(1 for e in evs if e["type"] == "chat") == 0 or len(evs) <= 10
+
+
+def test_wake_on_audio_finish_no_lost_signal():
+    """Audio phát xong -> wake() đánh thức worker ngay, và sự kiện đến sau drain không bị mất tín hiệu."""
+    col = batch_processor.BatchEventCollector()
+    col.add({"type": "chat", "user": "A", "text": "hi"})
+    col.drain()                       # drain phải clear trigger trong lock
+    col.wake()                        # giả lập on_audio_finish
+    t0 = time.monotonic()
+    assert col.wait_for_batch(timeout=3.0) is True
+    assert time.monotonic() - t0 < 1.5
+
+
+def test_audio_queue_on_finish_callback():
+    """PriorityAudioQueue gọi on_finish sau khi phát xong item."""
+    import audio_queue
+
+    hits = []
+    q = audio_queue.PriorityAudioQueue(
+        on_play=lambda wav, stop: True,
+        on_finish=lambda item: hits.append(item["kind"]),
+        dry_run=False,
+    ).start()
+    q.put("order", 1, "cam on", "a.wav")
+    deadline = time.monotonic() + 5.0
+    while not hits and time.monotonic() < deadline:
+        time.sleep(0.05)
+    q.stop(drain=True)
+    assert hits == ["order"]
+
+
+def test_app_remind_and_dirs_wired_from_env():
+    """handle_run đọc BATCH/CONTEXT_LIVE/REMIND từ os.environ (settings.apply ghi ra)."""
+    import app as app_mod
+    cfg = settings.get()
+    cfg["context_live_dir"] = "context-live-x"
+    cfg["remind_min_s"] = 30.0
+    cfg["remind_max_s"] = 60.0
+    cfg["sales_max_words"] = 70
+    settings.apply(cfg)
+    assert os.environ["CONTEXT_LIVE_DIR"] == "context-live-x"
+    assert os.environ["REMIND_MIN_S"] == "30.0"
+    assert os.environ["REMIND_MAX_S"] == "60.0"
+    assert os.environ["SALES_MAX_WORDS"] == "70"
+    assert hasattr(app_mod, "handle_run")

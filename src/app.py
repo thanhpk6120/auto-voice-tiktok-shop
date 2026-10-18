@@ -108,10 +108,12 @@ def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
-    audio_finished_event = threading.Event()
+    collector = BatchEventCollector()
 
     def on_audio_finish(item):
-        audio_finished_event.set()
+        # Vua phat xong audio -> danh thuc worker lay ngay su kien moi nhat da gom.
+        # Cac su kien den trong luc dang phat/tao voice khong bi mat, chi giu ban moi nhat.
+        collector.wake()
 
     queue = PriorityAudioQueue(
         on_play=play,
@@ -134,21 +136,29 @@ def handle_run(args) -> int:
     )
     use_batch = batch_window_s > 0
 
-    collector = BatchEventCollector()
+    prompts_dir = os.getenv("PROMPTS_DIR", "prompts")
+    context_dir = os.getenv("CONTEXT_DIR", "context-data")
+    context_live_dir = os.getenv("CONTEXT_LIVE_DIR", "context-live")
 
     def batch_worker():
         while not stop_event.is_set():
-            # Chờ có sự kiện ưu tiên cao (fast-track), hoặc timeout batch_window_s,
-            # hoặc âm thanh vừa phát xong để lấy ngay sự kiện mới nhất phát tiếp
+            # Thuc day khi: (a) co su kien uu tien cao vao hang doi, (b) vua phat xong
+            # audio -> lay ngay su kien moi nhat, hoac (c) het cua so batch_window_s.
+            # -> Tao text/voice khong phai cho nhau het cua so.
             collector.wait_for_batch(timeout=batch_window_s)
-            audio_finished_event.clear()
 
             evs = collector.drain()
             if not evs:
                 continue  # Không có sự kiện mới -> KHÔNG gọi LLM
             print(f"[run/batch] Gom {len(evs)} sự kiện mới nhất -> gửi AI LLM", flush=True)
             try:
-                items = process_event_batch(evs, max_events=batch_max_events)
+                items = process_event_batch(
+                    evs,
+                    max_events=batch_max_events,
+                    prompts_dir=prompts_dir,
+                    context_dir=context_dir,
+                    context_live_dir=context_live_dir,
+                )
                 for it in items:
                     txt = it.get("text", "")
                     if not txt:

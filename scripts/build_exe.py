@@ -47,7 +47,7 @@ def _rmtree(path: Path) -> None:
 def copy_runtime_files(dist: Path) -> list[str]:
     """Copy data nguoi dung co the sua + config mau ra canh .exe."""
     copied: list[str] = []
-    for name in ("context-data", "prompts", "ui"):
+    for name in ("context-data", "context-live", "prompts", "ui"):
         src = ROOT / name
         if not src.is_dir():
             continue
@@ -56,6 +56,8 @@ def copy_runtime_files(dist: Path) -> list[str]:
             shutil.rmtree(dst, ignore_errors=True)
         shutil.copytree(src, dst)
         copied.append(name)
+    (dist / "context-live").mkdir(parents=True, exist_ok=True)
+    copied.append("context-live/")
     for name in ("requirements.txt", ".env.example"):
         src = ROOT / name
         if src.is_file():

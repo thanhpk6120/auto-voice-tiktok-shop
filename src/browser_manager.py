@@ -207,10 +207,11 @@ CDP_SETUP_JS = r"""
                                 evType = 'order';
                             } else if (s.includes('tặng') || s.includes('đã gửi') || s.includes('gift') || s.includes('hoa hồng')) {
                                 evType = 'gift';
+                            } else if (s.includes('đang xem') || s.includes('viewing') || s.includes('bấm xem') || s.includes('xem sản phẩm')) {
+                                evType = 'viewing_product';
                             } else if (s.includes('vào phòng') || s.includes('joined') || s.includes('follow') || s.includes('chia sẻ')) {
                                 evType = 'join';
                             }
-
                             const parts = raw.split(/[:：]/, 2);
                             if (parts.length === 2 && parts[0].length < 30) {
                                 user = parts[0].trim();
@@ -225,6 +226,12 @@ CDP_SETUP_JS = r"""
                                 if (mGift) {
                                     user = mGift[1].trim();
                                     text = mGift[2].trim() || raw;
+                                }
+                                const mView = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đang xem sản phẩm|đang xem|bấm xem|viewing product|viewing)\s*(.*)/i);
+                                if (mView) {
+                                    user = mView[1].trim();
+                                    text = mView[2].trim() || raw;
+                                    evType = 'viewing_product';
                                 }
                                 const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia|vừa tham gia|tham gia)/i);
                                 if (mJoin) {
@@ -1132,3 +1139,126 @@ def stream_cdp_events(
         except Exception:
             if not stop_event.is_set():
                 time.sleep(1.0)
+
+
+def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
+    """Kết nối CDP đến trang TikTok Shop live dashboard để đọc danh sách sản phẩm trong giỏ hàng hiện tại."""
+    target = get_cdp_target(cdp_port=cdp_port)
+    if not target or not target.get("webSocketDebuggerUrl"):
+        return []
+
+    ws_url = target["webSocketDebuggerUrl"]
+    try:
+        from websockets.sync.client import connect
+    except ImportError:
+        return []
+
+    script = """
+    (() => {
+        const products = [];
+        const rows = document.querySelectorAll(
+            '.arco-table-tr, [class*="product-item"], [class*="ProductItem"], [data-e2e*="product"], tr'
+        );
+        let idx = 1;
+        for (const row of rows) {
+            if (row.querySelector('th') || (row.className && typeof row.className === 'string' && row.className.includes('header'))) continue;
+            const text = (row.innerText || '').trim();
+            if (!text || text.length < 4) continue;
+            
+            const isPinned = text.includes('Đang ghim') || text.includes('Ghim') || text.includes('Pin') || text.includes('Đang giới thiệu');
+            const priceMatch = text.match(/(\\d[\\d.,]*\\s*(?:₫|đ|VND|k))/i);
+            const price = priceMatch ? priceMatch[1] : 'Ưu đãi trên live';
+            
+            const sttMatch = text.match(/(?:^|\\s)#?(\\d{1,2})(?:\\s|[.:]|$)/);
+            const itemIdx = sttMatch ? parseInt(sttMatch[1], 10) : idx;
+            
+            let name = '';
+            const titleEl = row.querySelector('[class*="title"], [class*="name"], [data-e2e*="title"], h3, h4, span, div');
+            if (titleEl && titleEl.innerText && titleEl.innerText.length >= 6) {
+                name = titleEl.innerText.trim();
+            } else {
+                const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length >= 6 && !l.includes('₫') && !l.includes('đ'));
+                if (lines.length > 0) name = lines[0];
+            }
+            if (name && name.length >= 4) {
+                products.push({
+                    index: itemIdx,
+                    name: name,
+                    price: price,
+                    is_pinned: isPinned,
+                    raw: text
+                });
+                idx++;
+            }
+        }
+        return JSON.stringify(products);
+    })()
+    """
+    try:
+        with connect(ws_url, open_timeout=5, close_timeout=2) as ws:
+            cmd = {
+                "id": 9999,
+                "method": "Runtime.evaluate",
+                "params": {"expression": script, "returnByValue": True},
+            }
+            ws.send(json.dumps(cmd))
+            resp = json.loads(ws.recv())
+            val = resp.get("result", {}).get("result", {}).get("value", "[]")
+            data = json.loads(val) if isinstance(val, str) else (val or [])
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[browser] Lỗi fetch_live_products_cdp: {e}")
+        return []
+
+
+def save_live_products_to_context_live(products: list[dict], live_dir: str | Path | None = None) -> list[Path]:
+    """Lưu danh sách sản phẩm lấy từ giỏ hàng live vào các file markdown trong context-live/."""
+    if not products:
+        return []
+
+    target_dir = Path(live_dir or os.getenv("CONTEXT_LIVE_DIR", "context-live"))
+    if not target_dir.is_absolute():
+        try:
+            import settings
+            target_dir = settings.resolve_path(target_dir)
+        except Exception:
+            target_dir = Path(__file__).resolve().parent.parent / target_dir
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    saved_files: list[Path] = []
+
+    for prod in products:
+        idx = prod.get("index", 1)
+        name = prod.get("name", f"Sản phẩm {idx}").strip()
+        price = prod.get("price", "Ưu đãi trên live").strip()
+        is_pinned = prod.get("is_pinned", False)
+
+        slug = re.sub(r"[^\w\s-]", "", name.lower())
+        slug = re.sub(r"[\s_-]+", "-", slug).strip("-")[:40] or f"san-pham-{idx}"
+        file_path = target_dir / f"sp-{idx:02d}-{slug}.md"
+
+        status_str = "Đang ghim giới thiệu trên live" if is_pinned else "Trong giỏ hàng live"
+        content = (
+            f"# Sản phẩm #{idx}: {name}\n\n"
+            f"- Thứ tự trên live: Số {idx}\n"
+            f"- Trạng thái: {status_str}\n"
+            f"- Giá ưu đãi: {price}\n"
+            f"- Ghi chú: Khách hỏi mã {idx}, số {idx}, sp {idx} hoặc '{name}' thì trả lời theo thông tin này.\n\n"
+            f"## Hướng dẫn tư vấn bán hàng:\n"
+            f"- Chào thân mật khách hàng, xác nhận đúng sản phẩm số {idx}.\n"
+            f"- Nêu bật giá bán ưu đãi {price} độc quyền trên phiên live.\n"
+            f"- Nhắc khách bấm vào giỏ hàng góc trái màn hình để đặt hàng ngay kẻo hết mã giảm giá.\n"
+        )
+        try:
+            file_path.write_text(content, encoding="utf-8")
+            saved_files.append(file_path)
+        except Exception as e:
+            print(f"[browser] Lỗi ghi file {file_path}: {e}")
+
+    try:
+        import event_analyzer
+        event_analyzer.reload_intent()
+    except Exception:
+        pass
+
+    return saved_files

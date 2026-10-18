@@ -18,9 +18,11 @@ Phân tích toàn bộ các sự kiện trong 5 giây này và sinh ra danh sác
     "priority": 3
   }
 ]
-- Priority 1: Đơn hàng (order), Quà tặng (gift) - Ưu tiên cao nhất.
+- Priority 1: Đơn hàng (order), Quà tặng (gift), Đang xem sản phẩm (viewing_product) - Ưu tiên cao nhất.
+  * Khi có khách "đang xem sản phẩm", lập tức chào khách và tư vấn ngắn gọn về sản phẩm đó, báo giá ưu đãi và nhắc bấm giỏ hàng chốt đơn ngay!
 - Priority 2: Trả lời hỏi sản phẩm (sales), Giao tiếp bình luận (chat) - Ưu tiên vừa.
-- Priority 3: Chào người vào phòng (greeting) - Ưu tiên thấp (nếu có nhiều người vào cùng lúc, hãy gộp chung thành 1 câu chào: "Xin chào Tuấn, Lan và Minh!").
+  * Với câu hỏi về sản phẩm (sales): trả lời đầy đủ thông tin (50-80 từ) gồm tên, chất liệu/ưu điểm, giá ưu đãi và hướng dẫn chốt đơn giỏ hàng góc trái.
+- Priority 3: Chào người vào phòng (greeting), Nhắc tương tác (remind) - Ưu tiên thấp (nếu có nhiều người vào cùng lúc, hãy gộp chung thành 1 câu chào: "Xin chào Tuấn, Lan và Minh!").
 
 ## Quy tắc ngữ âm giọng đọc (TTS):
 - Toàn bộ là tiếng Việt có dấu.

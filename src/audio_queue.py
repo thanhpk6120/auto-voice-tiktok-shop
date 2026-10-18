@@ -25,6 +25,7 @@ class PriorityAudioQueue:
     def __init__(
         self,
         on_play=None,
+        on_finish=None,
         dry_run: bool = False,
         queue_limit: int = 50,
         interrupt_mode: str = "finish",
@@ -34,6 +35,7 @@ class PriorityAudioQueue:
         self._limit = queue_limit
         self._on_play = on_play
         self._dry_run = dry_run or on_play is None
+        self._on_finish = on_finish
         self.interrupt_mode = interrupt_mode
         self._stop = threading.Event()
         self._interrupt = threading.Event()
@@ -76,6 +78,14 @@ class PriorityAudioQueue:
     def current(self) -> dict | None:
         with self._lock:
             return self._current
+
+    def is_playing(self) -> bool:
+        with self._lock:
+            return self._current is not None
+
+    def is_idle(self) -> bool:
+        with self._lock:
+            return self._current is None and self._q.empty()
 
     # ---------- Worker ----------
 
@@ -144,4 +154,9 @@ class PriorityAudioQueue:
                         self.stats["dropped_requeue"] += 1
             else:
                 self.stats["played"] += 1
+            if self._on_finish is not None:
+                try:
+                    self._on_finish(item)
+                except Exception:
+                    pass
             self._interrupt.clear()

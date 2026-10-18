@@ -48,12 +48,17 @@ DEFAULTS: dict = {
     # Analyzer
     "prompts_dir": "prompts",
     "context_dir": "context-data",
+    "context_live_dir": "context-live",
     "batch_window_s": 5.0,
     "batch_max_events": 10,
     "out_dir": "out",
     "greeting_cooldown_s": 3.0,
     "greeting_max_batch": 5,
-    "sales_max_words": 35,
+    "sales_max_words": 75,
+    "remind_enabled": True,
+    "remind_min_s": 60.0,
+    "remind_max_s": 120.0,
+    "remind_text": "Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn",
     "gologin_dir": "gologin-basic-offline",
     "gologin_profiles_dir": "",
     "gologin_active_version": "",
@@ -76,15 +81,20 @@ SECTIONS: dict = {
     "Audio & Analyzer": [
         "prompts_dir",
         "context_dir",
+        "context_live_dir",
         "batch_window_s",
         "batch_max_events",
         "audio_device",
         "no_play",
         "interrupt_mode",
+        "sales_max_words",
+        "remind_enabled",
+        "remind_min_s",
+        "remind_max_s",
+        "remind_text",
         "out_dir",
         "greeting_cooldown_s",
         "greeting_max_batch",
-        "sales_max_words",
     ],
     "Trình duyệt / GoLogin": [
         "gologin_dir",
@@ -100,6 +110,51 @@ SECTIONS: dict = {
 SECRET_KEYS = {"llm_api_key"}
 
 _cache: dict | None = None
+
+# Cac lua chon san cho cac truong dropdown
+FIELD_OPTIONS: dict[str, list[str]] = {
+    "interrupt_mode": ["finish", "interrupt"],
+    "browser_mode": ["gologin_cdp", "extension"],
+    "log_level": ["INFO", "DEBUG", "WARNING", "ERROR"],
+    "voicestudio_model": ["tts-1", "tts-1-hd"],
+    "voicestudio_voice": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+}
+
+# Giai thich chi tiet / chu thich tooltip cho tung bien cau hinh
+FIELD_DOCS: dict[str, str] = {
+    "llm_base_url": "Dia chi API LLM tuong thich chuan OpenAI (vd: http://192.168.1.68:20130/v1 hoac http://localhost:11434/v1).",
+    "llm_api_key": "API Key de xac thuc voi server LLM (neu server local khong can key thi de trong).",
+    "llm_model": "Ten model LLM sinh loi thoai (vd: claude-sonnet-5, gpt-4o-mini, qwen2.5-7b).",
+    "llm_timeout_s": "Thoi gian cho toi da (giay) cho moi yeu cau goi LLM truoc khi tu dong fallback.",
+    "voicestudio_url": "Dia chi VoiceStudio Local API (mac dinh: http://127.0.0.1:3900).",
+    "voicestudio_voice": "Ten giong doc: alloy, echo, fable, onyx, nova, shimmer hoac ten giong ban da clone trong VoiceStudio.",
+    "voicestudio_model": "Model TTS trong VoiceStudio (tts-1 toc do nhanh hoac tts-1-hd chat luong cao).",
+    "tts_timeout_s": "Thoi gian cho toi da (giay) cho qua trinh tao file am thanh tu text.",
+    "bridge_url": "Dia chi WebSocket bridge nhan su kien tu Chrome Extension (ws://127.0.0.1:8765/ws?role=app).",
+    "bridge_port": "Cong mang port de khoi chay WebSocket server tiep nhan event tu extension.",
+    "prompts_dir": "Thu muc chua cac file prompt .md (system_sales.md, system_chat.md, system_batch.md).",
+    "context_dir": "Thu muc chua cac file thong tin san pham mau .md de AI hoc va tu van ban hang.",
+    "context_live_dir": "Thu muc tu dong luu thong tin cac san pham duoc quet truc tiep tu gio hang live tren TikTok.",
+    "batch_window_s": "Thoi gian cua so gom su kien (giay, mac dinh 5.0s). Su kien uu tien cao se duoc tao voice ngay.",
+    "batch_max_events": "So luong su kien toi da duoc xu ly trong 1 batch de tranh qua tai bo nho.",
+    "audio_device": "Thiet bi am thanh dau ra de phat voice (Loa may tinh hoac CABLE Input de dua vao OBS).",
+    "no_play": "Che do chay thu nghiem: sinh text va audio day du nhung khong phat ra loa.",
+    "interrupt_mode": "Chinh sach ngat: 'finish' (doc tron ven cau hien tai roi moi doc cau tiep); 'interrupt' (ngat ngay khi co don hang/qua).",
+    "sales_max_words": "Do dai toi da cua cau tu van san pham (50-100 tu) giup cau tra loi day du thong tin chi tiet.",
+    "remind_enabled": "Bat/Tat tinh nang doc dinh ky cau nhac nguoi xem tha tim va binh luan.",
+    "remind_min_s": "Thoi gian ngau nhien toi thieu (giay) giua 2 lan doc cau nhac tuong tac.",
+    "remind_max_s": "Thoi gian ngau nhien toi da (giay) giua 2 lan doc cau nhac tuong tac.",
+    "remind_text": "Noi dung cau thoai nhac nho khan gia tha tim va tuong tac tren live.",
+    "out_dir": "Thu muc luu tru cac file am thanh .wav duoc tao ra.",
+    "greeting_cooldown_s": "Thoi gian cooldown (giay) giua cac lan chao hoi nguoi xem moi vao phong.",
+    "greeting_max_batch": "So nguoi vao phong toi da duoc gom chung trong 1 cau chao.",
+    "gologin_dir": "Duong dan thu muc chua phan mem GoLogin offline tren may.",
+    "gologin_profiles_dir": "Duong dan thu muc luu cac profile trinh duyet GoLogin.",
+    "gologin_active_version": "Phien ban Chrome/Orbita dang duoc chon de khoi chay trinh duyet.",
+    "gologin_profile_id": "ID profile GoLogin duoc chon de tu dong dang nhap TikTok Shop live.",
+    "browser_mode": "Che do trinh duyet: 'gologin_cdp' (truc tiep qua CDP debug) hoac 'extension' (qua Chrome Extension).",
+    "log_level": "Muc do chi tiet ghi log cua he thong: INFO, DEBUG, WARNING, ERROR.",
+}
 
 
 def _project_root() -> Path:
@@ -269,8 +324,14 @@ def apply(cfg: dict | None = None) -> dict:
             _mod.LLM_TIMEOUT_S = float(cfg["llm_timeout_s"])
             _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))
             _mod.CONTEXT_DIR = str(cfg.get("context_dir", "context-data"))
+            _mod.CONTEXT_LIVE_DIR = str(cfg.get("context_live_dir", "context-live"))
             _mod.BATCH_WINDOW_S = float(cfg.get("batch_window_s", 5.0))
             _mod.BATCH_MAX_EVENTS = int(cfg.get("batch_max_events", 10))
+            _mod.SALES_MAX_WORDS = int(cfg.get("sales_max_words", 75))
+            _mod.REMIND_ENABLED = bool(cfg.get("remind_enabled", True))
+            _mod.REMIND_MIN_S = float(cfg.get("remind_min_s", 60.0))
+            _mod.REMIND_MAX_S = float(cfg.get("remind_max_s", 120.0))
+            _mod.REMIND_TEXT = str(cfg.get("remind_text", ""))
         except Exception:
             pass
 
@@ -284,6 +345,7 @@ def apply(cfg: dict | None = None) -> dict:
         event_analyzer.configure(
             prompts_dir=cfg.get("prompts_dir", "prompts"),
             context_dir=cfg.get("context_dir", "context-data"),
+            context_live_dir=cfg.get("context_live_dir", "context-live"),
             cooldown=float(cfg["greeting_cooldown_s"]),
             max_batch=int(cfg["greeting_max_batch"]),
             max_words=int(cfg["sales_max_words"]),
@@ -300,6 +362,12 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["CONTEXT_DIR"] = str(cfg.get("context_dir", "context-data"))
     os.environ["BATCH_WINDOW_S"] = str(cfg.get("batch_window_s", 5.0))
     os.environ["BATCH_MAX_EVENTS"] = str(cfg.get("batch_max_events", 10))
+    os.environ["CONTEXT_LIVE_DIR"] = str(cfg.get("context_live_dir", "context-live"))
+    os.environ["SALES_MAX_WORDS"] = str(cfg.get("sales_max_words", 75))
+    os.environ["REMIND_ENABLED"] = "true" if cfg.get("remind_enabled", True) else "false"
+    os.environ["REMIND_MIN_S"] = str(cfg.get("remind_min_s", 60.0))
+    os.environ["REMIND_MAX_S"] = str(cfg.get("remind_max_s", 120.0))
+    os.environ["REMIND_TEXT"] = str(cfg.get("remind_text", ""))
 
     return cfg
 

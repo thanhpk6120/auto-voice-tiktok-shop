@@ -236,6 +236,51 @@ def safe_devices() -> list[dict]:
 
 
 # --------------------------------- widget ---------------------------------
+class ToolTip:
+    """Hiển thị popup giải thích khi rê chuột vào widget."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.attributes("-topmost", True)
+            label = tk.Label(
+                tw,
+                text=self.text,
+                justify=tk.LEFT,
+                background="#2d3748",
+                foreground="#ffffff",
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=("Segoe UI", 9, "normal"),
+                padx=8,
+                pady=5,
+                wraplength=360,
+            )
+            label.pack()
+        except Exception:
+            pass
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
+
 
 class _Field:
     """1 dong config: tao widget theo spec, doc gia tri, ghi gia tri."""
@@ -247,21 +292,34 @@ class _Field:
         self.secret = spec["secret"]
         self.original = spec["value"]
 
-        ttk.Label(parent, text=self.key, width=24).grid(row=row, column=0, sticky="w", padx=6, pady=4)
+        doc_text = getattr(settings, "FIELD_DOCS", {}).get(self.key, "")
+        lbl_frame = ttk.Frame(parent)
+        lbl_frame.grid(row=row, column=0, sticky="w", padx=6, pady=4)
+        lbl = ttk.Label(lbl_frame, text=self.key, width=22)
+        lbl.pack(side="left")
+        if doc_text:
+            hint_lbl = ttk.Label(lbl_frame, text=" (?)", foreground="#3182ce", cursor="hand2")
+            hint_lbl.pack(side="left")
+            ToolTip(hint_lbl, doc_text)
+            ToolTip(lbl, doc_text)
 
         if self.kind == "bool":
             self.var = tk.BooleanVar(value=bool(self.original))
             self.widget = ttk.Checkbutton(parent, variable=self.var)
+            if doc_text:
+                ToolTip(self.widget, doc_text)
         else:
             self.var = tk.StringVar(value="" if self.original is None else str(self.original))
             if self.key == "audio_device":
                 self.widget = ttk.Combobox(parent, textvariable=self.var, values=app._device_labels(), width=46)
-            elif self.key == "browser_mode":
+            elif self.key in getattr(settings, "FIELD_OPTIONS", {}):
+                opts = settings.FIELD_OPTIONS[self.key]
+                state = "normal" if self.key in ("voicestudio_voice", "voicestudio_model") else "readonly"
                 self.widget = ttk.Combobox(
                     parent,
                     textvariable=self.var,
-                    values=["gologin_cdp", "extension"],
-                    state="readonly",
+                    values=opts,
+                    state=state,
                     width=46,
                 )
             elif self.key == "gologin_profile_id":
@@ -290,12 +348,14 @@ class _Field:
                         validate="key",
                         validatecommand=(app.root.register(app.num_ok), "%P", is_float),
                     )
+            if doc_text:
+                ToolTip(self.widget, doc_text)
         self.widget.grid(row=row, column=1, sticky="we", padx=6, pady=4)
 
         if self.secret:
             self.btn = ttk.Button(parent, text="Hiện", width=6, command=self.toggle_secret)
             self.btn.grid(row=row, column=2, padx=4)
-        elif self.key in ("gologin_dir", "gologin_profiles_dir", "prompts_dir", "context_dir", "out_dir"):
+        elif self.key in ("gologin_dir", "gologin_profiles_dir", "prompts_dir", "context_dir", "context_live_dir", "out_dir"):
             btn = ttk.Button(
                 parent,
                 text="Chọn thư mục...",
@@ -382,6 +442,16 @@ class App:
         self.tab_status = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_status, text="Trạng thái")
         self._build_status_tab(self.tab_status)
+
+        # Tab San pham Live
+        self.tab_products = ttk.Frame(self.nb, padding=6)
+        self.nb.add(self.tab_products, text="Sản phẩm Live")
+        self._build_products_tab(self.tab_products)
+
+        # Tab Huong dan Clone Giong
+        self.tab_clone_guide = ttk.Frame(self.nb, padding=6)
+        self.nb.add(self.tab_clone_guide, text="Hướng dẫn Clone Giọng")
+        self._build_clone_guide_tab(self.tab_clone_guide)
         self._write(f"config: {settings.config_path()}")
         self._write(f"data  : {launcher.app_dir()} | meipass={getattr(sys, '_MEIPASS', '-')}")
         self._write(f"audio : {len(self.devices)} thiết bị ra")
@@ -478,6 +548,138 @@ class App:
         bar_reset.pack(fill="x", pady=6)
         ttk.Button(bar_reset, text="Đặt lại số đếm", command=self.reset_status_counters).pack(side="right")
 
+
+    # ------------------------------ tab San pham Live ------------------------------
+    def _build_products_tab(self, parent) -> None:
+        pad = ttk.Frame(parent, padding=8)
+        pad.pack(fill="both", expand=True)
+
+        top_bar = ttk.Frame(pad, padding=(0, 4))
+        top_bar.pack(fill="x", pady=(0, 6))
+
+        btn_reload = ttk.Button(top_bar, text="🔄 Tải lại giỏ hàng live", command=self._reload_live_products)
+        btn_reload.pack(side="left", padx=4)
+        ToolTip(btn_reload, "Kết nối CDP vào trình duyệt để quét danh sách sản phẩm trong giỏ hàng live hiện tại")
+
+        btn_save = ttk.Button(top_bar, text="📥 Lưu vào context-live", command=self._save_live_products)
+        btn_save.pack(side="left", padx=4)
+        ToolTip(btn_save, "Lưu danh sách sản phẩm thành các file markdown trong thư mục context-live để AI tư vấn")
+
+        btn_open = ttk.Button(top_bar, text="📁 Mở thư mục context-live", command=self._open_context_live_dir)
+        btn_open.pack(side="left", padx=4)
+        ToolTip(btn_open, "Mở thư mục context-live trên máy tính")
+
+        self.live_prod_status_var = tk.StringVar(value="Chưa tải. Bấm 'Tải lại giỏ hàng live' để quét.")
+        ttk.Label(top_bar, textvariable=self.live_prod_status_var, foreground="#4a5568").pack(side="right", padx=6)
+
+        table_frame = ttk.Frame(pad)
+        table_frame.pack(fill="both", expand=True)
+
+        cols = ("stt", "name", "price", "pinned")
+        self.prod_tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=12)
+        self.prod_tree.heading("stt", text="#STT")
+        self.prod_tree.heading("name", text="Tên sản phẩm")
+        self.prod_tree.heading("price", text="Giá bán")
+        self.prod_tree.heading("pinned", text="Trạng thái ghim")
+
+        self.prod_tree.column("stt", width=60, anchor="center")
+        self.prod_tree.column("name", width=380, anchor="w")
+        self.prod_tree.column("price", width=130, anchor="center")
+        self.prod_tree.column("pinned", width=130, anchor="center")
+
+        tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.prod_tree.yview)
+        self.prod_tree.configure(yscrollcommand=tree_scroll.set)
+
+        self.prod_tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+        self._current_live_products: list[dict] = []
+
+    def _reload_live_products(self) -> None:
+        def _fetch():
+            self.live_prod_status_var.set("Đang quét sản phẩm từ trình duyệt...")
+            import browser_manager
+            prods = browser_manager.fetch_live_products_cdp()
+            if not prods:
+                try:
+                    import event_analyzer
+                    intent = event_analyzer._get_intent()
+                    prods = []
+                    for idx, p in enumerate(intent.products, 1):
+                        prods.append({
+                            "index": p.get("index") or idx,
+                            "name": p.get("name", ""),
+                            "price": p.get("price", "Ưu đãi"),
+                            "is_pinned": idx == 1,
+                        })
+                except Exception:
+                    prods = []
+
+            self._current_live_products = prods
+            self.root.after(0, lambda: self._update_prod_tree(prods))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _update_prod_tree(self, prods: list[dict]) -> None:
+        for item in self.prod_tree.get_children():
+            self.prod_tree.delete(item)
+        for p in prods:
+            stt = f"#{p.get('index', '-')}"
+            name = p.get("name", "")
+            price = p.get("price", "")
+            pinned = "⭐ Đang ghim" if p.get("is_pinned") else "Trong giỏ"
+            self.prod_tree.insert("", "end", values=(stt, name, price, pinned))
+        self.live_prod_status_var.set(f"Đã cập nhật {len(prods)} sản phẩm trong giỏ hàng.")
+
+    def _save_live_products(self) -> None:
+        if not getattr(self, "_current_live_products", None):
+            messagebox.showinfo("Thông báo", "Vui lòng bấm 'Tải lại giỏ hàng live' trước khi lưu!")
+            return
+        import browser_manager
+        saved = browser_manager.save_live_products_to_context_live(self._current_live_products)
+        messagebox.showinfo("Thành công", f"Đã lưu thành công {len(saved)} sản phẩm vào thư mục context-live!")
+        self.live_prod_status_var.set(f"Đã lưu {len(saved)} file vào context-live.")
+
+    def _open_context_live_dir(self) -> None:
+        live_dir = Path(self.cfg.get("context_live_dir", "context-live"))
+        if not live_dir.is_absolute():
+            try:
+                live_dir = settings.resolve_path(live_dir)
+            except Exception:
+                live_dir = Path.cwd() / live_dir
+        live_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(live_dir))
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể mở thư mục: {e}")
+
+    # ------------------------------ tab Huong dan Clone Giong ------------------------------
+    def _build_clone_guide_tab(self, parent) -> None:
+        txt = scrolledtext.ScrolledText(
+            parent,
+            wrap="word",
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=12,
+            background="#ffffff",
+            foreground="#2d3748",
+        )
+        txt.pack(fill="both", expand=True)
+
+        guide_file = Path(__file__).resolve().parent.parent / "docs" / "HUONG-DAN-CLONE-GIONG.md"
+        if not guide_file.is_file():
+            guide_file = Path("docs/HUONG-DAN-CLONE-GIONG.md")
+
+        content = ""
+        if guide_file.is_file():
+            try:
+                content = guide_file.read_text(encoding="utf-8")
+            except Exception:
+                pass
+        if not content:
+            content = "Xem hướng dẫn chi tiết tại file docs/HUONG-DAN-CLONE-GIONG.md"
+
+        txt.insert("1.0", content)
+        txt.configure(state="disabled")
     # ------------------------------ Khung log hoat dong (luon hien thi o duoi) ------------------------------
     def _build_log_panel(self, parent) -> None:
         toolbar = ttk.Frame(parent, padding=(2, 2))

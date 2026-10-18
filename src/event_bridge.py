@@ -104,7 +104,7 @@ _ALIAS_KEYS = {
     "amount": ("amount", "price", "total", "value"),
     "ts": ("ts", "timestamp", "time", "created_at", "createdAt"),
 }
-SCHEMA_TYPES = ("join", "chat", "gift", "order")
+SCHEMA_TYPES = ("join", "chat", "gift", "order", "viewing_product")
 SCHEMA_KEYS = ("type", "user", "ts", "text", "gift", "count", "product", "amount", "source")
 
 _JOIN_RE = re.compile(
@@ -118,6 +118,10 @@ _GIFT_RE = re.compile(
     r"(?:\s*[x×*]\s*(?P<count>\d+))?\s*$", re.I)
 _CHAT_RE = re.compile(r"^(?P<user>[^:：]{1,40}?)\s*[:：]\s*(?P<text>.+)$")
 _AMOUNT_RE = re.compile(r"(\d[\d.,]{2,})")
+_VIEW_RE = re.compile(
+    r"^(?P<user>[^:：]{1,40}?)\s+(?:đang xem sản phẩm|đang xem|bấm xem|is viewing product|is viewing)\b(?P<product>.*)$",
+    re.I,
+)
 
 
 def _clean(text: str) -> str:
@@ -180,14 +184,13 @@ def normalize_event(raw) -> dict:
         count = _as_int(_pick(raw, "count"))
         event["count"] = count if count and count > 0 else 1
 
-    if ev_type == "order":
+    if ev_type in ("order", "viewing_product"):
         product = _pick(raw, "product")
         if product:
             event["product"] = str(product).strip()
         amount = _as_int(_pick(raw, "amount"))
         if amount is not None and amount >= 0:
             event["amount"] = amount
-
     if raw.get("source"):
         event["source"] = str(raw["source"])[:32]
     return event
@@ -231,6 +234,16 @@ def classify_line(line: str) -> dict | None:
         if amount is not None:
             event["amount"] = amount
         return event
+
+    m = _VIEW_RE.match(line)
+    if m:
+        prod = _clean(m.group("product"))
+        return {
+            "type": "viewing_product",
+            "user": _clean(m.group("user")),
+            "product": prod or "sản phẩm trên live",
+            "text": line,
+        }
 
     m = _GIFT_RE.match(line)
     if m:

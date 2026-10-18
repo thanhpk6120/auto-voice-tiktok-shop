@@ -108,8 +108,16 @@ def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
+    audio_finished_event = threading.Event()
+
+    def on_audio_finish(item):
+        audio_finished_event.set()
+
     queue = PriorityAudioQueue(
-        on_play=play, dry_run=no_play, interrupt_mode=interrupt_mode
+        on_play=play,
+        on_finish=on_audio_finish,
+        dry_run=no_play,
+        interrupt_mode=interrupt_mode,
     ).start()
     stop_event = threading.Event()
     stats = {"spoke": 0, "tts_ok": 0, "tts_fail": 0, "lat_ms": []}
@@ -130,11 +138,15 @@ def handle_run(args) -> int:
 
     def batch_worker():
         while not stop_event.is_set():
-            time.sleep(batch_window_s)
+            # Chờ có sự kiện ưu tiên cao (fast-track), hoặc timeout batch_window_s,
+            # hoặc âm thanh vừa phát xong để lấy ngay sự kiện mới nhất phát tiếp
+            collector.wait_for_batch(timeout=batch_window_s)
+            audio_finished_event.clear()
+
             evs = collector.drain()
             if not evs:
                 continue  # Không có sự kiện mới -> KHÔNG gọi LLM
-            print(f"[run/batch] Gom {len(evs)} sự kiện trong {batch_window_s}s -> gửi AI LLM", flush=True)
+            print(f"[run/batch] Gom {len(evs)} sự kiện mới nhất -> gửi AI LLM", flush=True)
             try:
                 items = process_event_batch(evs, max_events=batch_max_events)
                 for it in items:
@@ -164,6 +176,40 @@ def handle_run(args) -> int:
         b_thread = threading.Thread(target=batch_worker, daemon=True, name="batch-processor")
         b_thread.start()
 
+    remind_enabled = os.getenv("REMIND_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    remind_min_s = float(os.getenv("REMIND_MIN_S", "60.0"))
+    remind_max_s = float(os.getenv("REMIND_MAX_S", "120.0"))
+    remind_text = os.getenv(
+        "REMIND_TEXT",
+        "Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn",
+    )
+
+    def remind_worker():
+        import random
+        from event_analyzer import phoneticize_vietnamese
+        while not stop_event.is_set():
+            delay = random.uniform(remind_min_s, remind_max_s)
+            elapsed = 0.0
+            while elapsed < delay and not stop_event.is_set():
+                time.sleep(0.5)
+                elapsed += 0.5
+            if stop_event.is_set() or not remind_enabled:
+                continue
+
+            # Chỉ đọc nhắc nhở khi hàng đợi rảnh (không chen ngang khách hỏi hàng/đơn hàng)
+            if queue.qsize() <= 1 and not collector.has_high_priority():
+                spoken_text = phoneticize_vietnamese(remind_text)
+                try:
+                    wav = synthesize(spoken_text)
+                    if wav:
+                        queue.put("remind", 3, spoken_text, wav)
+                        print(f"[run/remind] Nhắc tương tác: '{spoken_text}'", flush=True)
+                except Exception as e:
+                    print(f"[run/remind] Lỗi nhắc tương tác: {e}", flush=True)
+
+    if remind_enabled:
+        r_thread = threading.Thread(target=remind_worker, daemon=True, name="remind-loop")
+        r_thread.start()
     def worker(ev: dict) -> None:
         spoke = False
         try:

@@ -78,6 +78,7 @@
   const ORDER_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đã đặt đơn|đã chốt đơn|vừa chốt đơn|vừa đặt hàng|đã mua|placed an order|ordered|purchased)\b(?<rest>.*)$/i;
   const GIFT_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đã tặng|vừa tặng|sent|tặng)\s+(?<gift>.+?)(?:\s*[x×*]\s*(?<count>\d+))?\s*$/i;
   const CHAT_RE = /^(?<user>[^:：]{1,40}?)\s*[:：]\s*(?<text>.+)$/;
+  const VIEW_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đang xem sản phẩm|đang xem|bấm xem|is viewing product|is viewing)\b(?<product>.*)$/i;
   const AMOUNT_RE = /(\d[\d.,]{2,})/;
 
   const clean = (s) => (s || "").replace(/\s+/g, " ").trim().replace(/^[-–—|:\s]+|[-–—|:\s]+$/g, "");
@@ -103,6 +104,16 @@
       if (rest) event.product = rest;
       return event;
     }
+    m = text.match(VIEW_RE);
+    if (m) {
+      return {
+        type: "viewing_product",
+        user: clean(m.groups.user),
+        product: clean(m.groups.product) || "sản phẩm trên live",
+        text: text,
+      };
+    }
+
 
     m = text.match(GIFT_RE);
     if (m) {

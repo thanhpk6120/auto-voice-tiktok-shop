@@ -302,3 +302,62 @@ Ví dụ `config.json`:
      - **Xoá** phiên bản không dùng (có cơ chế bảo vệ: không cho xoá phiên bản đang kích hoạt).
      - **Tải phiên bản mới từ GitHub Release**: Chọn phiên bản từ danh sách (141, 120, 119, 118...), tự động tải và giải nén Orbita Browser + ChromeDriver trong luồng nền.
 Bằng chứng build + config override: [`docs/TEST-BUILD.md`](docs/TEST-BUILD.md).
+
+---
+
+## 12. Tính năng nâng cấp: Batch mới nhất, Ưu tiên cao tốc, Giỏ hàng Live & Clone giọng
+
+### 12.1 Cơ chế gom sự kiện "chỉ lấy cái mới nhất" (Overwriting Buffer)
+
+`BatchEventCollector` được thiết kế lại để **không tích lũy vô hạn** trong bộ nhớ:
+
+| Loại hoạt động | Cách xử lý | Ghi chú |
+|---|---|---|
+| `join` / `follow` | Chỉ giữ **N người mới nhất** (mặc định 5), đè lên người cũ | Tránh lưu hàng nghìn người vào phòng |
+| `viewing_product` | Giữ **1 sản phẩm mới nhất theo từng user** (dict theo user, ghi đè) | Khách đổi sản phẩm liên tục không tràn RAM |
+| `order` / `gift` / `chat` | Đẩy vào hàng đợi ưu tiên + **kích hoạt fast-track** | Tạo voice ngay, không đợi hết cửa sổ |
+| `grep` khác | Chỉ giữ sự kiện cuối cùng | — |
+
+- `wait_for_batch(timeout)` thức dậy **ngay lập tức** khi có sự kiện ưu tiên cao thay vì sleep cứng 5 giây.
+- `drain()` lấy toàn bộ sự kiện mới nhất và **giải phóng bộ nhớ ngay** sau mỗi chu kỳ.
+- Sau khi âm thanh phát xong, callback `on_finish` báo hiệu để lấy ngay sự kiện mới nhất phát tiếp — **không chờ nhau**.
+
+### 12.2 Thứ tự ưu tiên (không ngắt voice đang phát)
+
+| Priority | Loại sự kiện | Hành vi |
+|---|---|---|
+| **1** | `order`, `gift`, `viewing_product` (đang xem sản phẩm) | Tạo voice nhanh nhất, phát **ngay sau khi câu hiện tại đọc xong** |
+| **2** | `sales` (hỏi sản phẩm), `chat` | Ưu tiên vừa |
+| **3** | `greeting` (chào), `remind` (nhắc tương tác) | Ưu tiên thấp, bị bỏ nếu hàng đợi > 50 |
+
+> Chế độ mặc định `interrupt_mode = "finish"` **không bao giờ ngắt** câu đang phát. Đặt `"interrupt"` nếu muốn cắt ngang khi có đơn hàng/quà tặng.
+
+### 12.3 Tab "Sản phẩm Live" — đồng bộ giỏ hàng
+
+- **Tải lại giỏ hàng live:** kết nối CDP đến dashboard, quét bảng sản phẩm, hiển thị **tên + số thứ tự + giá + trạng thái ghim**.
+- **Lưu vào context-live:** ghi mỗi sản phẩm thành 1 file `.md` (`sp-01-ten.md`, `sp-02-ten.md`...) vào thư mục `context_live_dir`.
+- AI tự nhận diện **"mã 1", "số 2", "sp 3"** hoặc tên sản phẩm → tư vấn đúng sản phẩm, đúng giá, đúng thứ tự hiện tại.
+- Đường dẫn cấu hình qua `context_live_dir` (mặc định `context-live`, có nút chọn thư mục + nút mở thư mục).
+
+### 12.4 Nhắc tương tác định kỳ (random X–Y giây)
+
+- `remind_enabled`: bật/tắt (mặc định **bật**).
+- `remind_min_s` / `remind_max_s`: khoảng random giây giữa 2 lần nhắc (mặc định 60–120s).
+- `remind_text`: nội dung câu nhắc, mặc định *"Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn"*.
+- Chỉ đọc khi hàng đợi rảnh — **không chen ngang** khách hỏi hàng/chốt đơn.
+
+### 12.5 Tư vấn sản phẩm dài & nhiều thông tin hơn
+
+- `sales_max_words` nâng từ 35 lên **75 từ** (cấu hình được).
+- Prompt `system_sales.md` ép LLM trả lời theo **4 bước chuẩn streamer**: chào + xác nhận SP → chất liệu/ưu điểm/giải đáp → giá ưu đãi + freeship → CTA chốt đơn giỏ hàng.
+- `system_batch.md` bổ sung priority 1 cho `viewing_product` và yêu cầu 50–80 từ cho câu hỏi `sales`.
+
+### 12.6 Giao diện: tooltip + dropdown
+
+- **Tooltip (?):** mọi biến cấu hình đều có chú thích giải thích (`settings.FIELD_DOCS`), rê chuột vào nhãn hoặc ô nhập để xem.
+- **Dropdown bắt buộc chọn:** `interrupt_mode`, `browser_mode`, `log_level`, `voicestudio_model`, `voicestudio_voice` (`FIELD_OPTIONS`).
+- Tab **Hướng dẫn Clone Giọng** hiển thị trực tiếp nội dung [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUONG-DAN-CLONE-GIONG.md).
+
+### 12.7 Clone giọng nói
+
+Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUONG-DAN-CLONE-GIONG.md): chuẩn bị file mẫu 5–15s → tạo voice trong VoiceStudio (CosyVoice / GPT-SoVITS) → đặt tên vào `voicestudio_voice` → kiểm tra bằng Simulator.

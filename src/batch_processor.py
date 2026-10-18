@@ -18,6 +18,7 @@ Cơ chế:
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -55,7 +56,7 @@ def filter_batch_events(
         usr = str(ev.get("user") or ev.get("username") or "Khách").strip()
         txt = str(ev.get("text") or ev.get("content") or "").strip()
 
-        if typ in ("order", "gift"):
+        if typ in ("order", "gift", "viewing_product", "viewing", "view_product", "xem_san_pham"):
             orders_and_gifts.append(ev)
         elif typ in ("join", "joined", "greeting"):
             if usr and usr not in ("Khách", "bạn mới") and usr not in joined_users:
@@ -67,7 +68,7 @@ def filter_batch_events(
                 seen_chat_texts.add(key)
                 chats.append(ev)
 
-    # Ưu tiên: đơn hàng & quà tặng trước, sau đó đến chat
+    # Ưu tiên: đơn hàng, quà tặng & đang xem sản phẩm trước, sau đó đến chat
     filtered: list[dict] = list(orders_and_gifts)
     remaining_slots = max(0, max_events - len(filtered))
     filtered.extend(chats[:remaining_slots])
@@ -114,13 +115,13 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
             continue
 
         item_type = str(item.get("type") or "chat").lower()
-        if item_type not in ("order", "gift", "sales", "chat", "greeting"):
+        if item_type not in ("order", "gift", "sales", "chat", "greeting", "viewing_product", "remind"):
             item_type = "chat"
 
-        # Độ ưu tiên chuẩn hóa: 1 (order/gift), 2 (sales/chat), 3 (greeting)
+        # Độ ưu tiên chuẩn hóa: 1 (order/gift/viewing_product), 2 (sales/chat), 3 (greeting/remind)
         priority = item.get("priority")
         if priority not in (1, 2, 3):
-            if item_type in ("order", "gift"):
+            if item_type in ("order", "gift", "viewing_product"):
                 priority = 1
             elif item_type in ("sales", "chat"):
                 priority = 2
@@ -128,7 +129,8 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
                 priority = 3
 
         # Đảm bảo phiên âm 100% tiếng Việt có dấu cho TTS
-        speak_text = phoneticize_vietnamese(clean_speak_text(raw_text_val, max_words=45))
+        max_w = int(os.getenv("SALES_MAX_WORDS", "75"))
+        speak_text = phoneticize_vietnamese(clean_speak_text(raw_text_val, max_words=max_w))
 
         valid_items.append({
             "type": item_type,
@@ -141,36 +143,101 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
 
 
 class BatchEventCollector:
-    """Thu gom sự kiện từ các luồng (thread-safe)."""
+    """Thu gom sự kiện từ các luồng (thread-safe) với cơ chế overwriting buffer.
 
-    def __init__(self):
+    - Hoạt động vào phòng (join/follow): chỉ giữ danh sách người mới nhất, đè lên cái cũ
+      để tránh lưu nhiều trong bộ nhớ.
+    - Hoạt động đang xem sản phẩm: lưu sự kiện xem mới nhất theo từng user (đè lên cũ).
+    - Sự kiện ưu tiên cao (order, gift, viewing_product, chat): kích hoạt trigger ngay
+      để tạo voice nhanh nhất có thể (không phải đợi hết batch_window_s).
+    """
+
+    def __init__(self, max_join_history: int = 5):
         self._lock = threading.Lock()
-        self._events: list[dict] = []
+        self._high_priority: list[dict] = []
+        self._latest_joins: list[str] = []
+        self._latest_viewing: dict[str, dict] = {}
+        self._other_activities: list[dict] = []
+        self._event_trigger = threading.Event()
+        self._max_join_history = max_join_history
 
     def add(self, event: dict) -> None:
         if not event or not isinstance(event, dict):
             return
+        typ = str(event.get("type") or event.get("kind") or "").lower()
+        usr = str(event.get("user") or event.get("username") or "Khách").strip()
+
         with self._lock:
-            self._events.append(dict(event))
+            if typ in ("order", "gift"):
+                self._high_priority.append(dict(event))
+                self._event_trigger.set()
+            elif typ in ("viewing_product", "viewing", "view_product", "xem_san_pham"):
+                self._latest_viewing[usr] = dict(event)
+                self._event_trigger.set()
+            elif typ in ("chat", "comment", "message"):
+                self._high_priority.append(dict(event))
+                self._event_trigger.set()
+            elif typ in ("join", "joined", "greeting"):
+                if usr and usr not in ("Khách", "bạn mới"):
+                    if usr in self._latest_joins:
+                        self._latest_joins.remove(usr)
+                    self._latest_joins.append(usr)
+                    if len(self._latest_joins) > self._max_join_history:
+                        self._latest_joins.pop(0)
+            else:
+                self._other_activities = [dict(event)]
+
+    def wait_for_batch(self, timeout: float = 5.0) -> bool:
+        """Chờ sự kiện: nếu có sự kiện ưu tiên cao thì thức dậy ngay (fast-track),
+        ngược lại chờ hết timeout của batch window."""
+        triggered = self._event_trigger.wait(timeout=timeout)
+        if triggered:
+            time.sleep(0.15)
+        return triggered
 
     def drain(self) -> list[dict]:
+        """Lấy toàn bộ sự kiện mới nhất và giải phóng bộ nhớ ngay lập tức."""
         with self._lock:
-            if not self._events:
-                return []
-            events = list(self._events)
-            self._events.clear()
+            events: list[dict] = []
+            events.extend(self._high_priority)
+            self._high_priority.clear()
+
+            for v in self._latest_viewing.values():
+                events.append(v)
+            self._latest_viewing.clear()
+
+            for u in self._latest_joins:
+                events.append({"type": "join", "user": u, "text": f"{u} vừa vào phòng"})
+            self._latest_joins.clear()
+
+            events.extend(self._other_activities)
+            self._other_activities.clear()
+
+            self._event_trigger.clear()
             return events
+
+    def drain_latest(self) -> list[dict]:
+        return self.drain()
 
     def size(self) -> int:
         with self._lock:
-            return len(self._events)
+            return (
+                len(self._high_priority)
+                + len(self._latest_viewing)
+                + len(self._latest_joins)
+                + len(self._other_activities)
+            )
 
+    def has_high_priority(self) -> bool:
+        with self._lock:
+            return bool(self._high_priority or self._latest_viewing)
 
 def process_event_batch(
     events: list[dict],
     max_events: int = 10,
     prompts_dir: str | Path | None = None,
     context_dir: str | Path | None = None,
+    context_live_dir: str | Path | None = None,
 ) -> list[dict]:
     """Xử lý 1 lô sự kiện tích lũy trong 5 giây:
 
@@ -211,23 +278,22 @@ def process_event_batch(
     # Đọc prompt hệ thống system_batch.md
     system_prompt = get_prompt("system_batch", prompts_dir=prompts_dir)
 
-    # Thu thập ngữ cảnh sản phẩm từ context-data/*.md
-    intent = ChatIntent(context_dir) if context_dir is not None else _get_intent()
+    # Thu thập ngữ cảnh sản phẩm từ context-data/*.md và context-live/*.md
+    intent = ChatIntent(context_dir, live_dir=context_live_dir) if context_dir is not None else _get_intent()
     matched_products: list[str] = []
     seen_prods: set[str] = set()
 
     for ev in filtered_events:
-        txt = ev.get("text") or ""
+        txt = ev.get("text") or ev.get("product") or ""
         prod = intent.match(txt)
         if prod and prod["name"] not in seen_prods:
             seen_prods.add(prod["name"])
             price_val = prod.get("price", "Liên hệ")
-            matched_products.append(f"- {prod['name']}: Giá {price_val}. {prod.get('ctx', '')[:200]}")
+            matched_products.append(f"- {prod['name']}: Giá {price_val}. Chi tiết: {prod.get('ctx', '')}")
 
     if not matched_products and intent.products:
-        # Lấy tối đa 5 sản phẩm đầu tiên làm ngữ cảnh tổng quan
         for p in intent.products[:5]:
-            matched_products.append(f"- {p['name']}: Giá {p.get('price', 'ưu đãi')}")
+            matched_products.append(f"- {p['name']}: Giá {p.get('price', 'ưu đãi')}. Chi tiết: {p.get('ctx', '')[:300]}")
 
     context_str = "\n".join(matched_products) if matched_products else "Chưa có thông tin sản phẩm cụ thể."
 

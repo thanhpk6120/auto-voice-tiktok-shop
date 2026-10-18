@@ -1,6 +1,7 @@
 """Phân tích event live -> kind/priority/speak_text."""
 from __future__ import annotations
 
+import os
 import random
 import re
 import time
@@ -234,56 +235,93 @@ _VI_STOPWORDS = {
 class ChatIntent:
     """Detect câu hỏi về SP từ context-data/*.md và trả lời RAG."""
 
-    def __init__(self, context_dir: str | Path = "context-data"):
+    def __init__(self, context_dir: str | Path = "context-data", live_dir: str | Path | None = None):
         p = Path(context_dir)
         if not p.is_absolute():
-            # frozen: context-data nam trong _internal (_MEIPASS), co the bi ghi de
-            # bang ban copy canh .exe -> settings.resolve_path lo thu tu do.
             try:
                 import settings
-
                 p = settings.resolve_path(p)
             except Exception:
                 p = _project_root() / p
         self.context_dir = p
+        
+        self.live_dir = None
+        l_dir = live_dir or os.getenv("CONTEXT_LIVE_DIR", "context-live")
+        if l_dir:
+            lp = Path(l_dir)
+            if not lp.is_absolute():
+                try:
+                    import settings
+                    lp = settings.resolve_path(lp)
+                except Exception:
+                    lp = _project_root() / lp
+            self.live_dir = lp
+
         self.products: list[dict] = []
         self._load()
-
     def _load(self) -> None:
         self.products.clear()
-        if not self.context_dir.is_dir():
-            return
-        for md in sorted(self.context_dir.glob("*.md")):
-            try:
-                text = md.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            name = ""
-            for line in text.splitlines():
-                line = line.strip()
-                if line.startswith("# "):
-                    name = line[2:].strip()
-                    break
-                if line.startswith("#"):
-                    name = line.lstrip("#").strip()
-                    break
-            if not name:
-                continue
-            raw_tokens = [t.lower() for t in re.findall(r"\w+", name, flags=re.UNICODE)]
-            keywords = {t for t in raw_tokens if len(t) >= 2 and t not in _VI_STOPWORDS}
-            bigrams = set()
-            for i in range(len(raw_tokens) - 1):
-                w1, w2 = raw_tokens[i], raw_tokens[i + 1]
-                if w1 not in _VI_STOPWORDS or w2 not in _VI_STOPWORDS:
-                    bigrams.add(f"{w1} {w2}")
-            price = ""
-            for line in text.splitlines():
-                line = line.strip()
-                if line.startswith("Giá:"):
-                    price = line.split(":", 1)[1].strip()
-                    break
-            self.products.append({"name": name, "keywords": keywords, "bigrams": bigrams, "ctx": text, "price": price})
+        dirs_to_scan = [self.context_dir]
+        if self.live_dir and self.live_dir.is_dir() and self.live_dir != self.context_dir:
+            dirs_to_scan.append(self.live_dir)
 
+        for target_dir in dirs_to_scan:
+            if not target_dir.is_dir():
+                continue
+            for md in sorted(target_dir.glob("*.md")):
+                try:
+                    text = md.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                name = ""
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("# "):
+                        name = line[2:].strip()
+                        m_clean = re.match(r"^sản phẩm\s*#?\d+\s*:\s*(.*)$", name, re.I)
+                        if m_clean:
+                            name = m_clean.group(1).strip()
+                        break
+                    if line.startswith("#"):
+                        name = line.lstrip("#").strip()
+                        m_clean = re.match(r"^sản phẩm\s*#?\d+\s*:\s*(.*)$", name, re.I)
+                        if m_clean:
+                            name = m_clean.group(1).strip()
+                        break
+                if not name:
+                    continue
+                raw_tokens = [t.lower() for t in re.findall(r"\w+", name, flags=re.UNICODE)]
+                keywords = {t for t in raw_tokens if len(t) >= 2 and t not in _VI_STOPWORDS}
+                bigrams = set()
+                for i in range(len(raw_tokens) - 1):
+                    w1, w2 = raw_tokens[i], raw_tokens[i + 1]
+                    if w1 not in _VI_STOPWORDS or w2 not in _VI_STOPWORDS:
+                        bigrams.add(f"{w1} {w2}")
+                price = ""
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("Giá:") or line.startswith("- Giá:"):
+                        price = line.split(":", 1)[1].strip()
+                        break
+                # Trích xuất số thứ tự giỏ hàng (index) nếu có
+                p_idx = None
+                idx_match = re.search(r"(?:#|thứ tự\s*(?:trên live)?:\s*số\s*|sp-)(\d+)", text, re.I) or re.search(r"sp-(\d+)", md.stem)
+                if idx_match:
+                    try:
+                        p_idx = int(idx_match.group(1))
+                    except Exception:
+                        p_idx = None
+
+                self.products.append({
+                    "name": name,
+                    "keywords": keywords,
+                    "bigrams": bigrams,
+                    "price": price,
+                    "index": p_idx,
+                    "ctx": text,
+                    "file": md.name,
+                    "live": bool(self.live_dir and target_dir == self.live_dir),
+                })
     def match(self, text: str) -> dict | None:
         tl = (text or "").lower()
         q_raw_tokens = [t.lower() for t in re.findall(r"\w+", tl, flags=re.UNICODE)]
@@ -295,6 +333,13 @@ class ChatIntent:
         for prod in self.products:
             score = 0
             p_name_lower = prod["name"].lower()
+
+            # Khớp theo số thứ tự giỏ hàng nếu câu hỏi nhắc đến mã/số (vd: "mã 1", "áo số 2", "sp 3")
+            idx_q = re.search(r"(?:mã|số|sản phẩm|sp)\s*#?(\d+)", tl)
+            if idx_q and prod.get("index") is not None:
+                if int(idx_q.group(1)) == prod["index"]:
+                    score += 250
+
             if p_name_lower in tl:
                 score += 150
             matched_bigrams = prod.get("bigrams", set()).intersection(q_bigrams)
@@ -302,12 +347,17 @@ class ChatIntent:
             matched_kws = prod.get("keywords", set()).intersection(q_tokens)
             score += len(matched_kws) * 10
 
-            if score > best_score:
+            # San pham doc tu context-live (gio hang hien tai) thang khi hoa diem
+            if score > best_score or (
+                score == best_score
+                and score > 0
+                and prod.get("live")
+                and not (best_prod or {}).get("live")
+            ):
                 best_score = score
                 best_prod = prod
 
         return best_prod if best_score >= 20 else None
-
     def answer(self, question: str) -> str | None:
         prod = self.match(question)
         if prod is None:
@@ -341,8 +391,9 @@ _DEFAULT_MAX_BATCH: int = 5
 _DEFAULT_MAX_WORDS: int = 45
 _PROMPTS_DIR: str = "prompts"
 _CONTEXT_DIR: str = "context-data"
+_CONTEXT_LIVE_DIR: str = "context-live"
 _MAX_BATCH: int = _DEFAULT_MAX_BATCH
-_MAX_WORDS: int = _DEFAULT_MAX_WORDS
+_MAX_WORDS: int = int(os.getenv("SALES_MAX_WORDS", "75"))
 
 
 def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
@@ -417,14 +468,23 @@ _intent: ChatIntent | None = None
 _batcher: GreetingBatcher | None = None
 
 
-def configure(context_dir=None, cooldown=None, max_batch=None, max_words=None) -> None:
-    """Ap cau hinh runtime; tham so None giu gia tri hien tai.
-
-    Ep singleton ve None de lan goi ke tiep rebuild voi tham so moi.
-    """
-    global _CONTEXT_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
+def configure(
+    prompts_dir=None,
+    context_dir=None,
+    context_live_dir=None,
+    cooldown=None,
+    max_batch=None,
+    max_words=None,
+) -> None:
+    """Ap cau hinh runtime; tham so None giu gia tri hien tai."""
+    global _PROMPTS_DIR, _CONTEXT_DIR, _CONTEXT_LIVE_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
+    if prompts_dir is not None:
+        _PROMPTS_DIR = str(prompts_dir)
     if context_dir is not None:
         _CONTEXT_DIR = str(context_dir)
+        _intent = None
+    if context_live_dir is not None:
+        _CONTEXT_LIVE_DIR = str(context_live_dir)
         _intent = None
     if max_batch is not None:
         _MAX_BATCH = max(1, int(max_batch))
@@ -436,10 +496,16 @@ def configure(context_dir=None, cooldown=None, max_batch=None, max_words=None) -
     )
 
 
+def reload_intent() -> None:
+    """Làm mới bộ nhớ đệm ChatIntent để đọc lại các file context mới nhất."""
+    global _intent
+    _intent = None
+
+
 def _get_intent() -> ChatIntent:
     global _intent
     if _intent is None:
-        _intent = ChatIntent(_CONTEXT_DIR)
+        _intent = ChatIntent(_CONTEXT_DIR, live_dir=_CONTEXT_LIVE_DIR)
     return _intent
 
 
@@ -531,6 +597,23 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
         gift_str = f"{count_int} {gift}" if count_int > 1 else str(gift)
         return {"kind": "gift", "priority": 1, "speak_text": phoneticize_vietnamese(f"Cảm ơn {user} đã tặng {gift_str}!")}
 
+
+    if typ in ("viewing_product", "viewing", "view_product", "xem_san_pham"):
+        product = ev.get("product") or ev.get("product_name") or ""
+        raw_text = str(ev.get("text") or ev.get("raw") or "").strip()
+        if not product and raw_text:
+            m_v = re.search(r"(?:đang xem|xem sản phẩm|viewing)\s*(.*)", raw_text, re.I)
+            if m_v:
+                product = m_v.group(1).strip()
+        
+        matched = _get_intent().match(product) if product else None
+        p_display = matched["name"] if matched else (product or "sản phẩm trên live")
+        price_str = f", giá ưu đãi chỉ {phoneticize_vietnamese(matched['price'])}" if matched and matched.get("price") else ""
+        
+        reply = phoneticize_vietnamese(
+            f"Dạ sóp chào {user}, mình đang xem {p_display}{price_str} đúng không ạ? Sản phẩm này đang bán rất chạy, bạn bấm vào giỏ hàng chốt đơn kẻo hết nhé!"
+        )
+        return {"kind": "viewing_product", "priority": 1, "speak_text": reply}
     if typ == "order":
         product = ev.get("product") or ev.get("product_name") or ev.get("item")
         raw_text = str(ev.get("text") or ev.get("raw") or ev.get("content") or "").strip()

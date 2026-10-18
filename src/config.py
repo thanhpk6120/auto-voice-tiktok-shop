@@ -39,7 +39,15 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "20"))
 PROMPTS_DIR = os.getenv("PROMPTS_DIR", "prompts")
 CONTEXT_DIR = os.getenv("CONTEXT_DIR", "context-data")
+CONTEXT_LIVE_DIR = os.getenv("CONTEXT_LIVE_DIR", "context-live")
 BATCH_WINDOW_S = float(os.getenv("BATCH_WINDOW_S", "5.0"))
 BATCH_MAX_EVENTS = int(os.getenv("BATCH_MAX_EVENTS", "10"))
-
+SALES_MAX_WORDS = int(os.getenv("SALES_MAX_WORDS", "75"))
+REMIND_ENABLED = os.getenv("REMIND_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+REMIND_MIN_S = float(os.getenv("REMIND_MIN_S", "60.0"))
+REMIND_MAX_S = float(os.getenv("REMIND_MAX_S", "120.0"))
+REMIND_TEXT = os.getenv(
+    "REMIND_TEXT",
+    "Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn",
+)
 # ponytail: minimal config reader; replace with pydantic-settings when validation needed

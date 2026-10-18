@@ -86,4 +86,13 @@ def test_analyze_chat_priority_and_formatting():
     ev_alo = {"type": "chat", "user": "Thanh", "text": "Alo shop ơi"}
     res_alo = analyze(ev_alo, use_batcher=False)
     assert res_alo["priority"] == 2
-    assert "Thanh" in res_alo["speak_text"] and "sóp" in res_alo["speak_text"]
+    assert "Thanh" in res_alo["speak_text"]
+    # Câu chào nay do LLM sinh theo prompts/system_greeting.md, nên KHÔNG assert cứng nội dung
+    # LLM trả về (sẽ flaky). Kiểm chứng hai bất biến tất định thay thế:
+    #   1. Prompt chào hỏi BẮT BUỘC LLM tự xưng "sóp" (không gọi mình là trợ lý/AI).
+    #   2. Mọi từ "shop"/"sop" trong câu trả lời đều được phiên âm thành "sóp" trước khi đọc.
+    from event_analyzer import get_prompt, phoneticize_vietnamese
+
+    prompt = get_prompt("system_greeting").lower()
+    assert "sóp" in prompt and "trợ lý" in prompt
+    assert "sóp" in phoneticize_vietnamese("Dạ shop đây ạ")

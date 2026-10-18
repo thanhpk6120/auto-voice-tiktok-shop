@@ -452,6 +452,14 @@ Luồng: **bình luận → phân loại ý định → chọn đúng prompt →
 `system_chat`, `system_batch`. Mỗi prompt đều yêu cầu **chỉ trả về JSON** và **kèm JSON mẫu**
 để model bám theo. `intent_router.build_speak_prompt()` tự ghép phần ràng buộc JSON vào prompt nền.
 
+**Dự phòng khi thiếu file prompt:** nếu `prompts_dir` sai/không đọc được, `get_prompt()` trả về
+prompt dựng sẵn trong code cho **cả 7 prompt** — cũng only-JSON, có JSON mẫu, tiếng Việt có dấu,
+và ép LLM tự xưng `"sóp"` để giọng đọc luôn đúng vai streamer.
+
+**Ép tự xưng:** mọi prompt sinh câu thoại đều bắt buộc có chữ `"sóp"` và cấm LLM tự gọi mình là
+"trợ lý"/"AI". Ngoài ra `phoneticize_vietnamese()` phiên âm `shop`/`sop` → `sóp` trước khi đưa vào TTS,
+nên dù LLM có trả về "shop" thì giọng đọc vẫn đúng.
+
 Đọc kết quả bằng `src/json_utils.py` — chịu được mọi kiểu JSON lỗi thường gặp của LLM:
 
 | Lỗi LLM hay mắc | Cách xử lý |

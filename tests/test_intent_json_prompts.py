@@ -367,3 +367,26 @@ def test_build_spec_includes_new_modules():
     spec = (ROOT / "build.spec").read_text(encoding="utf-8")
     assert '"json_utils"' in spec
     assert '"intent_router"' in spec
+
+
+def test_builtin_prompt_fallback_is_only_json_and_diacritic():
+    """Khi thư mục prompts không đọc được, prompt dựng sẵn phải vẫn only-JSON + có dấu + tự xưng 'sóp'."""
+    from event_analyzer import get_prompt
+
+    for name in (
+        "system_greeting",
+        "system_sales",
+        "system_order",
+        "system_gift",
+        "system_chat",
+        "system_batch",
+        "system_analyzer",
+    ):
+        content = get_prompt(name, prompts_dir="thu-muc-prompt-khong-ton-tai")
+        assert content, f"{name}: prompt dựng sẵn rỗng"
+        low = content.lower()
+        assert "json" in low, f"{name}: prompt dựng sẵn thiếu yêu cầu JSON"
+        assert "{" in content, f"{name}: prompt dựng sẵn thiếu JSON mẫu"
+    # Prompt sinh câu thoại phải ép tự xưng "sóp" để TTS đọc đúng vai streamer
+    for name in ("system_greeting", "system_sales", "system_order", "system_gift", "system_chat"):
+        assert "sóp" in get_prompt(name, prompts_dir="thu-muc-prompt-khong-ton-tai"), name

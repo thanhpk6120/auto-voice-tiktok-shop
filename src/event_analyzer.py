@@ -65,6 +65,26 @@ _BULLET_RE = re.compile(r"^([-*•]|\d+[.)])\s+")
 _NOTE_PREFIXES = ("→", "->", "=>", "#", "ghi chú", "note:", "lưu ý:")
 _NOTE_WORDS = ("cần xác nhận", "cần kiểm tra", "nếu shop")
 
+# LLM doi khi tra kem "meta" cua chinh no (Tier:/Skills:/Rationale:/Action:) —
+# doc len live la loi, phai loc bo.
+_META_MARKERS = ("skills:", "rationale:", "pre-flight", "plugins/mcp")
+_META_ACTION_RE = re.compile(r"action:\s*[A-Za-z/_\-]+(?![A-Za-z/_\-])\s*", re.IGNORECASE)
+
+
+def strip_agent_meta(text: str) -> str:
+    """Bo phan 'meta' do agent/LLM tu in ra (Pre-flight ... Action: Direct) truoc cau thoai."""
+    if not text:
+        return ""
+    low = text.lower()
+    if any(m in low for m in _META_MARKERS) or "action:" in low:
+        m = _META_ACTION_RE.search(text)
+        if m:
+            return text[m.end():].lstrip(" .,;:-–—").strip()
+    return text
+
+# Tu khoa CTA (call-to-action) de giu lai khi phai cat bot cau dai.
+_CTA_WORDS = ("giỏ hàng", "gio hang", "chốt đơn", "chot don", "bấm", "bam", "đặt hàng", "dat hang")
+
 
 def clean_speak_text(text: str, max_words: int = 45) -> str:
     """Bo ghi chu noi bo / markdown khoi cau LLM truoc khi dua cho TTS.
@@ -87,11 +107,28 @@ def clean_speak_text(text: str, max_words: int = 45) -> str:
     body = " ".join(l for l in lines if l).strip()
     body = body.replace("**", "").replace("__", "").replace("`", "")
     body = re.sub(r'\s+', " ", body).strip().strip('"').strip("'").strip()
+    body = strip_agent_meta(body)
     if not body:
         return ""
     words = body.split(" ")
     if len(words) > max_words:
-        body = " ".join(words[:max_words]).rstrip(",;:") + "."
+        head = words[:max_words]
+        # Neu bi cat mat CTA, giu lai DUNG cau chot don (ngan nhat co CTA) o cuoi.
+        tail = " ".join(words[max_words:]).strip()
+        cta = ""
+        for s in re.split(r"(?<=[.!?])\s+", tail):
+            s = s.strip()
+            if s and any(w in s.lower() for w in _CTA_WORDS) and len(s.split()) <= 25:
+                cta = s
+        if not cta:
+            # Tail khong co dau cau tach ro: cat tu tu khoa CTA dau tien, toi da 25 tu.
+            low_tail = tail.lower()
+            pos = min((low_tail.find(w) for w in _CTA_WORDS if w in low_tail), default=-1)
+            if pos >= 0:
+                cta = " ".join(tail[pos:].split()[:25]).rstrip(",;:. ") + "."
+        cut = " ".join(head).rstrip(",;:. ")
+        body = f"{cut}. {cta}".strip() if cta else cut + "."
+        body = re.sub(r"\.{2,}", ".", body)
     return body
 
 _DIGITS_VI = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"]

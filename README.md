@@ -361,3 +361,16 @@ Bằng chứng build + config override: [`docs/TEST-BUILD.md`](docs/TEST-BUILD.m
 ### 12.7 Clone giọng nói
 
 Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUONG-DAN-CLONE-GIONG.md): chuẩn bị file mẫu 5–15s → tạo voice trong VoiceStudio (CosyVoice / GPT-SoVITS) → đặt tên vào `voicestudio_voice` → kiểm tra bằng Simulator.
+### 12.8 Bổ sung sau khi kiểm chứng end-to-end
+
+- **Không chờ nhau:** `PriorityAudioQueue` phát xong 1 câu → callback `on_finish` gọi `collector.wake()`
+  đánh thức worker batch ngay, lấy sự kiện mới nhất vừa được gom để tạo text/voice tiếp
+  (không đợi hết `batch_window_s`). `drain()` clear trigger **bên trong lock** nên không mất tín hiệu.
+- **Đè lên bản cũ cùng người dùng:** đơn hàng/quà tặng/chat của cùng 1 user được ghi đè — chỉ giữ bản mới nhất.
+- **Chặn trần bộ nhớ:** tối đa 20 sự kiện ưu tiên cao; vượt ngưỡng thì **giữ 100% order/gift** và cắt bớt phần còn lại.
+- **Phân biệt nguồn ngữ cảnh:** sản phẩm đọc từ `context_live_dir` (giỏ hàng hiện tại) được ưu tiên hơn
+  `context_dir` khi hoà điểm — tư vấn luôn khớp giỏ hàng đang chạy.
+- **Regex mã số linh hoạt:** nhận cả `mã 1`, `ma 1`, `số 2`, `so 2`, `sp 3`, `item 4` (kể cả không dấu).
+- **Lọc "meta" của LLM:** câu trả lời đôi khi kèm `[Pre-flight] ... Action: Direct` — `strip_agent_meta()`
+  tự cắt bỏ trước khi đưa cho TTS.
+- **Giữ CTA khi cắt bớt câu dài:** nếu vượt `sales_max_words`, câu chốt đơn ("bấm giỏ hàng...") được giữ lại ở cuối.

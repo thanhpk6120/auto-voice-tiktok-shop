@@ -201,3 +201,34 @@ def test_app_remind_and_dirs_wired_from_env():
     assert os.environ["REMIND_MAX_S"] == "60.0"
     assert os.environ["SALES_MAX_WORDS"] == "70"
     assert hasattr(app_mod, "handle_run")
+
+
+def test_strip_agent_meta_from_llm_reply():
+    """LLM đôi khi in kèm 'meta' (Pre-flight/Rationale/Action) — phải bị lọc trước khi đọc."""
+    raw = (
+        "[Pre-flight] Tier: một | Skills: None | Plugins/MCP: None | "
+        "Rationale: Sinh mot script TTS | Action: Direct "
+        "Chào anh chị, em xác nhận đúng áo thun nam nhé."
+    )
+    out = event_analyzer.clean_speak_text(raw, max_words=75)
+    assert "[Pre-flight]" not in out
+    assert "Rationale" not in out
+    assert out.startswith("Chào anh chị")
+
+    assert event_analyzer.strip_agent_meta("Chào bạn nhé.") == "Chào bạn nhé."
+
+
+def test_long_reply_truncation_keeps_cta():
+    """Câu quá dài bị cắt nhưng vẫn giữ câu chốt đơn (CTA) ở cuối."""
+    text = "Chào bạn nhé. " + ("mô tả sản phẩm rất dài và chi tiết " * 12) + \
+           "Bạn bấm giỏ hàng góc trái chốt đơn ngay nhé."
+    out = event_analyzer.clean_speak_text(text, max_words=12)
+    assert "giỏ hàng" in out
+    assert ".." not in out
+
+
+def test_sales_max_words_default_is_75():
+    """Ngưỡng từ cho câu tư vấn đã nâng lên 75 (dài hơn, nhiều thông tin hơn)."""
+    assert settings.DEFAULTS["sales_max_words"] == 75
+    assert settings.DEFAULTS["context_live_dir"] == "context-live"
+    assert settings.DEFAULTS["remind_min_s"] < settings.DEFAULTS["remind_max_s"]

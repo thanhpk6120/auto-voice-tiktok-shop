@@ -97,3 +97,19 @@ def test_apply_sets_browser_env():
 
     assert os.environ.get("GOLOGIN_DIR") == "my-custom-gologin"
     assert os.environ.get("BROWSER_MODE") == "gologin_cdp"
+
+
+def test_apply_sets_batch_and_prompts_env():
+    import os
+
+    cfg = settings.get()
+    cfg["prompts_dir"] = "my-prompts"
+    cfg["context_dir"] = "my-context"
+    cfg["batch_window_s"] = 7.5
+    cfg["batch_max_events"] = 15
+    settings.apply(cfg)
+
+    assert os.environ.get("PROMPTS_DIR") == "my-prompts"
+    assert os.environ.get("CONTEXT_DIR") == "my-context"
+    assert os.environ.get("BATCH_WINDOW_S") == "7.5"
+    assert os.environ.get("BATCH_MAX_EVENTS") == "15"

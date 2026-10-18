@@ -296,6 +296,10 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["GOLOGIN_ACTIVE_VERSION"] = str(cfg.get("gologin_active_version", ""))
     os.environ["GOLOGIN_PROFILE_ID"] = str(cfg.get("gologin_profile_id", ""))
     os.environ["BROWSER_MODE"] = str(cfg.get("browser_mode", "gologin_cdp"))
+    os.environ["PROMPTS_DIR"] = str(cfg.get("prompts_dir", "prompts"))
+    os.environ["CONTEXT_DIR"] = str(cfg.get("context_dir", "context-data"))
+    os.environ["BATCH_WINDOW_S"] = str(cfg.get("batch_window_s", 5.0))
+    os.environ["BATCH_MAX_EVENTS"] = str(cfg.get("batch_max_events", 10))
 
     return cfg
 

@@ -30,6 +30,7 @@ from event_analyzer import (
     phoneticize_vietnamese,
     clean_speak_text,
     _get_intent,
+    ChatIntent,
 )
 
 
@@ -211,7 +212,7 @@ def process_event_batch(
     system_prompt = get_prompt("system_batch", prompts_dir=prompts_dir)
 
     # Thu thập ngữ cảnh sản phẩm từ context-data/*.md
-    intent = _get_intent()
+    intent = ChatIntent(context_dir) if context_dir is not None else _get_intent()
     matched_products: list[str] = []
     seen_prods: set[str] = set()
 

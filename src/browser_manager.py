@@ -63,15 +63,16 @@ CDP_SETUP_JS = r"""
         'quà tặng quảng bá',
         'tin nhắn từ hệ thống',
         'người đăng ký',
-        'người theo dõi'
+        'người theo dõi',
+        'chào mừng bạn đến với tiktok live'
     ];
 
-    const DATE_TIME_RE = /^(\\d{1,2}[\\/\\-.]\\d{1,2}([\\/\\-.]\\d{2,4})?(\\s+\\d{1,2}(:\\d{2})*)?|\\d{1,2}:\\d{2}(:\\d{2})?)$/;
+    const DATE_TIME_RE = /^(\d{1,2}[/.\-]\d{1,2}([/.\-]\d{2,4})?(\s+\d{1,2}(:\d{2})*)?|\d{1,2}:\d{2}(:\d{2})?)$/;
 
     function isJunk(text) {
         if (!text) return true;
-        const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length >= 3) return true;
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length >= 4) return true;
         const s = text.trim().toLowerCase();
         if (s.length < 2) return true;
         if (DATE_TIME_RE.test(s)) return true;
@@ -105,8 +106,9 @@ CDP_SETUP_JS = r"""
             if (p.children.length === 0 && p.innerText.trim() === 'Trò chuyện') {
                 let el = p;
                 while (el && el !== document.body) {
-                    const list = el.querySelector('.arco-list-content, [role="list"], .arco-list-items');
-                    if (list) return list;
+                    if (el.className && typeof el.className === 'string' && el.className.includes('flex-col') && el.className.includes('h-full')) {
+                        return el;
+                    }
                     el = el.parentElement;
                 }
             }
@@ -115,22 +117,19 @@ CDP_SETUP_JS = r"""
     }
 
     function findActivityList() {
-        const actDiv = document.querySelector('div.bg-neutral-white.flex-grow.min-h-0');
-        if (actDiv) return actDiv;
-
-        const allSpans = document.querySelectorAll('span, div');
-        for (const s of allSpans) {
-            if (s.children.length === 0 && s.innerText.trim() === 'Hoạt động') {
-                let el = s;
+        const pTags = document.querySelectorAll('p, span, div');
+        for (const p of pTags) {
+            if (p.children.length === 0 && p.innerText.trim() === 'Hoạt động') {
+                let el = p;
                 while (el && el !== document.body) {
-                    if (el.className && el.className.includes('flex-grow')) {
+                    if (el.className && typeof el.className === 'string' && el.className.includes('flex-col') && el.className.includes('h-full')) {
                         return el;
                     }
                     el = el.parentElement;
                 }
             }
         }
-        return null;
+        return document.querySelector('div.bg-neutral-white.flex-grow, [class*="activity"]');
     }
 
     let chatObs = null;
@@ -149,25 +148,38 @@ CDP_SETUP_JS = r"""
                             const raw = (node.innerText || node.textContent || '').trim();
                             if (isJunk(raw)) continue;
 
+                            let evType = 'chat';
                             let user = 'Khách';
                             let text = raw;
 
                             const nickEl = node.querySelector('[class*="nick"], [class*="user"], [class*="name"]');
-                            if (nickEl) {
-                                user = nickEl.innerText.trim() || user;
-                                text = raw.replace(user, '').trim().replace(/^[:：]\\s*/, '') || raw;
-                            } else {
+                            if (nickEl && nickEl.innerText.trim()) {
+                                user = nickEl.innerText.trim();
+                                text = raw.replace(user, '').trim().replace(/^[:：\s]+/, '') || raw;
+                            } else if (raw.includes(':') || raw.includes('：')) {
                                 const parts = raw.split(/[:：]/, 2);
                                 if (parts.length === 2 && parts[0].length < 30) {
                                     user = parts[0].trim();
                                     text = parts[1].trim();
-                                } else {
-                                    const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia)/i);
-                                    if (mJoin) { user = mJoin[1].trim(); text = raw; evType = 'join'; }
+                                }
+                            } else {
+                                const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+                                if (lines.length >= 2 && lines[0].length < 30) {
+                                    user = lines[0];
+                                    text = lines.slice(1).join(' ');
                                 }
                             }
+
+                            const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia|vừa tham gia|tham gia)/i);
+                            if (mJoin) {
+                                user = mJoin[1].trim();
+                                text = raw;
+                                evType = 'join';
+                            }
+
                             if (isJunk(text)) continue;
                             pushEvent(evType, user, text, 'Trò chuyện', raw);
+                        }
                     }
                 }
             });
@@ -214,11 +226,18 @@ CDP_SETUP_JS = r"""
                                     user = mGift[1].trim();
                                     text = mGift[2].trim() || raw;
                                 }
-                                const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia)/i);
+                                const mJoin = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:vừa vào|đã vào|joined|đã tham gia|vừa tham gia|tham gia)/i);
                                 if (mJoin) {
                                     user = mJoin[1].trim();
                                     text = raw;
                                     evType = 'join';
+                                }
+                                if (user === 'Khách') {
+                                    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+                                    if (lines.length >= 2 && lines[0].length < 30) {
+                                        user = lines[0];
+                                        text = lines.slice(1).join(' ');
+                                    }
                                 }
                             }
                             if (isJunk(text)) continue;

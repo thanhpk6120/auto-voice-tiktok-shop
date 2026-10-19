@@ -385,9 +385,12 @@ Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUO
 Nút **🔄 Tải lại giỏ hàng live** (tab *Sản phẩm Live*) đọc dashboard
 `https://shop.tiktok.com/streamer/live/product/dashboard` bằng 2 lớp:
 
-1. **Nguồn chính — bắt response `/live_product/list` qua CDP Network** (`Network.getResponseBody`).
-   Endpoint này cần chữ ký `msToken` dùng-một-lần do chính trang ký nên không thể tự gọi lại;
-   bắt response thật cho ra **product_id chuẩn** (35 sản phẩm, giá + tồn kho + shop).
+1. **Nguồn chính — gọi lại `/live_product/list` ngay trong tab dashboard.**
+   Lấy URL đã ký (`msToken`/`X-Bogus`) từ `performance.getEntriesByType('resource')` rồi
+   `fetch` lại với cookie của trang. **Không reload** nên không gián đoạn phiên live.
+   Khoá dữ liệu là `data.products` (không phải `list`/`items`).
+   Kết quả: **35 sản phẩm** có `product_id`, giá, tồn kho, shop trong ~1 giây.
+   *(Nếu chữ ký đã hết hạn: bắt response qua CDP `Network.getResponseBody` khi trang tự tải lại.)*
 2. **Dự phòng — quét DOM virtual list.** Dashboard mới không dùng `<tr>`/`arco-table-tr` nữa
    mà là `div.rounded-4.mb-8` (~90–200px) bên trong `[class*="virtualized-container"]`.
    DOM có tên + giá + "Còn: ..." + "Lựa chọn yêu thích" nhưng **không có product_id**,
@@ -404,8 +407,7 @@ Trả về dict:
 | `is_pinned` | DOM chứa "Lựa chọn yêu thích" (gắn qua tên sản phẩm khi có API) |
 | `url` | `https://shop.tiktok.com/view/product/<id>` |
 
-**Không gọi AI** ở bước này. Lấy danh sách cần reload trang dashboard
-(tương tự bấm nút refresh trên UI), không điều hướng đi chỗ khác.
+**Không gọi AI** ở bước này, và **không reload** tab dashboard — bấm nút giữa live vẫn an toàn.
 
 ### 13.2 Nút **📥 Load context-live**
 

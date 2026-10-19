@@ -1395,6 +1395,52 @@ def _connect_cdp(cdp_port: int = 30899, timeout_s: float = 5.0):
     return connect(target["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2), None
 
 
+# Gọi lại endpoint giỏ hàng live NGAY TRONG TAB DASHBOARD: dùng URL có chữ ký mà
+# chính trang đã phát ra (msToken/X-Bogus). Không reload -> không gián đoạn live.
+# Lưu ý: khoá dữ liệu thật là data.products (KHÔNG phải list/items).
+_CDP_LIVE_PRODUCT_API_JS = r"""
+(async () => {
+    const entries = performance.getEntriesByType('resource')
+        .map(e => e.name)
+        .filter(n => n.includes('/live_product/list'));
+    if (!entries.length) return null;
+
+    // Duyệt từ mới nhất về cũ: URL cũ có thể đã hết hạn chữ ký.
+    for (let i = entries.length - 1; i >= 0; i--) {
+        try {
+            const r = await fetch(entries[i], { credentials: 'include' });
+            if (!r.ok) continue;
+            const j = await r.json();
+            const d = j.data || {};
+            const items = d.products || d.list || d.items || (Array.isArray(d) ? d : []);
+            if (items && items.length) return items;
+        } catch (e) { /* thu URL ke tiep */ }
+    }
+    return null;
+})()
+"""
+
+
+def _fetch_products_via_page_api(cdp_port: int = 30899, timeout_s: float = 25.0) -> list[dict]:
+    """Gọi lại /live_product/list từ trong tab dashboard bằng URL đã ký sẵn.
+
+    Không reload trang nên không gián đoạn phiên live. Trả list thô có
+    product_id/title/giá, hoặc [] nếu không có URL hoặc chữ ký đã hết hạn.
+    """
+    ws, err = _connect_cdp(cdp_port=cdp_port)
+    if ws is None:
+        if err:
+            print(f"[browser] {err}")
+        return []
+    try:
+        with ws:
+            data = _cdp_eval(ws, _CDP_LIVE_PRODUCT_API_JS, req_id=8990, timeout_s=timeout_s)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[browser] Lỗi gọi API giỏ hàng trong trang: {e}")
+        return []
+
+
 def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.0) -> list[dict]:
     """Bắt response /live_product/list của dashboard qua CDP Network.
 
@@ -1473,7 +1519,11 @@ def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
     except Exception:
         dom = []
 
-    raws = _harvest_live_products_network(cdp_port=cdp_port)
+    # 1) Goi lai API trong trang (nhanh, KHONG reload -> khong gian doan live)
+    raws = _fetch_products_via_page_api(cdp_port=cdp_port)
+    # 2) Du phong: bat response khi trang tu tai lai
+    if not raws:
+        raws = _harvest_live_products_network(cdp_port=cdp_port)
 
     products: list[dict] = []
     if raws:

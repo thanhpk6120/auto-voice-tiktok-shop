@@ -231,20 +231,34 @@ def test_launch_gologin_profile_applies_profile_json():
             assert any("tiktok.com" in arg for arg in call_cmd)
 
 
-def test_fetch_live_products_api_network(monkeypatch):
-    """fetch_hop qua Network co product_id -> dung nhu la, khong bat DOM du phong."""
+def test_fetch_live_products_page_api(monkeypatch):
+    """API trong trang (khong reload) an truc -> khong bat Network/DOM."""
     raw_api = [{"product_id": "1735159097906791637", "title": "SP A",
                 "format_available_price": "35.000\u20ab", "format_origin_price": "40.000\u20ab",
                 "stock_num": 100, "seller_info": {"shop_name": "jojo.vn.official"}}]
+    calls = []
 
-    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
-    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: raw_api)
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api",
+                        lambda cdp_port=30899, timeout_s=25.0: calls.append("api") or raw_api)
+    monkeypatch.setattr(bm, "_harvest_live_products_network",
+                        lambda cdp_port=30899, timeout_s=35.0: calls.append("network") or [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: calls.append("dom") or [])
+
     prods = bm.fetch_live_products_cdp()
     assert len(prods) == 1
-    assert prods[0]["id"] == "1735159097906791637"
-    assert prods[0]["url"] == "https://shop.tiktok.com/view/product/1735159097906791637"
-    assert prods[0]["price"] == "35.000\u20ab"
-    assert prods[0]["raw"]["shop"] == "jojo.vn.official"
+    # DOM quet truoc de lay co ghim, roi den API in-page; khong bao gio goi Network
+    assert calls == ["dom", "api"]
+
+
+def test_fetch_live_products_network_when_page_api_empty(monkeypatch):
+    """API in-page rong (chu ky het han) -> bat response qua Network."""
+    raw_api = [{"product_id": "999", "title": "SP B", "format_available_price": "1.000\u20ab"}]
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: [])
+    monkeypatch.setattr(bm, "_harvest_live_products_network",
+                        lambda cdp_port=30899, timeout_s=35.0: raw_api)
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 1 and prods[0]["id"] == "999"
 
 
 def test_fetch_live_products_dom_ping_pin(monkeypatch):
@@ -252,8 +266,9 @@ def test_fetch_live_products_dom_ping_pin(monkeypatch):
     dom = [{"index": 1, "id": "", "name": "SP A"[:60], "price": "35.000\u20ab",
             "is_pinned": True, "url": "", "raw": {}}]
     raw_api = [{"product_id": "999", "title": "SP A"[:60], "format_available_price": "35.000\u20ab"}]
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: raw_api)
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
     monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
-    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: raw_api)
     prods = bm.fetch_live_products_cdp()
     assert len(prods) == 1
     assert prods[0]["id"] == "999"
@@ -261,11 +276,12 @@ def test_fetch_live_products_dom_ping_pin(monkeypatch):
 
 
 def test_fetch_live_products_dom_fallback(monkeypatch):
-    """Network rong + DOM co -> dung DOM (khong co id / url)."""
+    """Cai API in-page + Network het han -> dung DOM (khong co id / url)."""
     dom = [{"index": 1, "id": "", "name": "SP B", "price": "10.000\u20ab",
             "is_pinned": False, "url": "", "raw": {"stock": "Con: 3"}}]
-    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: [])
     monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
     prods = bm.fetch_live_products_cdp()
     assert len(prods) == 1
     assert prods[0]["name"] == "SP B"
@@ -273,15 +289,21 @@ def test_fetch_live_products_dom_fallback(monkeypatch):
 
 
 def test_fetch_live_products_empty(monkeypatch):
-    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: [])
     monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
     assert bm.fetch_live_products_cdp() == []
 
 
 def test_fetch_live_products_no_browser(monkeypatch):
-    """Cai helper khong _connect_cdp -> return roi (thong qua scan + harvest)."""
+    """Khong co browser -> ca 3 helper tra []."""
     monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (None, "khong co browser"))
+    assert bm._fetch_products_via_page_api() == []
     assert bm._scan_live_products_dom() == []
     assert bm._harvest_live_products_network() == []
+    # fetch: API in-page rong -> se thu Net + DOM cung that bai
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+    assert bm.fetch_live_products_cdp() == []
 
 

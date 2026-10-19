@@ -231,39 +231,57 @@ def test_launch_gologin_profile_applies_profile_json():
             assert any("tiktok.com" in arg for arg in call_cmd)
 
 
-def test_fetch_live_products_dom(monkeypatch):
-    """fetch_live_products_cdp contrat DOM va hoá chuẩn dict đầu ra."""
-    dom_payload = [
-        {"index": 1, "id": "", "name": "SP A", "price": "35.000₫",
-         "is_pinned": True, "url": "", "raw": {"stock": "Còn: 4,7K", "dom": True}},
-        {"index": 2, "id": "", "name": "SP B", "price": "10.000₫",
-         "is_pinned": False, "url": "", "raw": {}},
-        "rác",  # phải bị bỏ qua
-        {"name": ""},  # không tên -> bỏ
-        {"index": 9, "name": "SP C", "price": 123},  # price số -> chuỗi
-    ]
+def test_fetch_live_products_api_network(monkeypatch):
+    """fetch_hop qua Network co product_id -> dung nhu la, khong bat DOM du phong."""
+    raw_api = [{"product_id": "1735159097906791637", "title": "SP A",
+                "format_available_price": "35.000\u20ab", "format_origin_price": "40.000\u20ab",
+                "stock_num": 100, "seller_info": {"shop_name": "jojo.vn.official"}}]
 
-    class FakeWS:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (FakeWS(), None))
-    monkeypatch.setattr(bm, "_cdp_eval", lambda ws, script, req_id=0, timeout_s=20.0: dom_payload)
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: raw_api)
     prods = bm.fetch_live_products_cdp()
-    assert len(prods) == 3
-    assert [p["name"] for p in prods] == ["SP A", "SP B", "SP C"]
+    assert len(prods) == 1
+    assert prods[0]["id"] == "1735159097906791637"
+    assert prods[0]["url"] == "https://shop.tiktok.com/view/product/1735159097906791637"
+    assert prods[0]["price"] == "35.000\u20ab"
+    assert prods[0]["raw"]["shop"] == "jojo.vn.official"
+
+
+def test_fetch_live_products_dom_ping_pin(monkeypatch):
+    """API bat duoc nhung khong chua sp DOM: pin tu DOM gan theo ten."""
+    dom = [{"index": 1, "id": "", "name": "SP A"[:60], "price": "35.000\u20ab",
+            "is_pinned": True, "url": "", "raw": {}}]
+    raw_api = [{"product_id": "999", "title": "SP A"[:60], "format_available_price": "35.000\u20ab"}]
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: raw_api)
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 1
+    assert prods[0]["id"] == "999"
     assert prods[0]["is_pinned"] is True
-    assert prods[0]["raw"]["stock"] == "Còn: 4,7K"
-    assert prods[2]["index"] == 9
-    assert prods[2]["price"] == "123"
-    assert isinstance(prods[0]["raw"], dict)
+
+
+def test_fetch_live_products_dom_fallback(monkeypatch):
+    """Network rong + DOM co -> dung DOM (khong co id / url)."""
+    dom = [{"index": 1, "id": "", "name": "SP B", "price": "10.000\u20ab",
+            "is_pinned": False, "url": "", "raw": {"stock": "Con: 3"}}]
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 1
+    assert prods[0]["name"] == "SP B"
+    assert prods[0]["id"] == ""
+
+
+def test_fetch_live_products_empty(monkeypatch):
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    assert bm.fetch_live_products_cdp() == []
 
 
 def test_fetch_live_products_no_browser(monkeypatch):
-    monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (None, "không có browser"))
-    assert bm.fetch_live_products_cdp() == []
+    """Cai helper khong _connect_cdp -> return roi (thong qua scan + harvest)."""
+    monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (None, "khong co browser"))
+    assert bm._scan_live_products_dom() == []
+    assert bm._harvest_live_products_network() == []
 
 

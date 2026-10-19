@@ -1395,14 +1395,117 @@ def _connect_cdp(cdp_port: int = 30899, timeout_s: float = 5.0):
     return connect(target["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2), None
 
 
-def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
-    """Đọc danh sách sản phẩm trong giỏ hàng live trực tiếp từ DOM qua CDP.
+def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.0) -> list[dict]:
+    """Bắt response /live_product/list của dashboard qua CDP Network.
 
-    Dashboard dùng virtual list (không còn <tr>/arco-table-tr); API
-    live_product/list cần msToken dùng-một-lần nên gọi lại luôn rỗng
-    -> quét DOM là cách duy nhất ổn định. Trả về list dict:
-    index, id, name, price, is_pinned, url, raw. Lỗi/không có browser -> [].
+    API này chỉ chạy được với chữ ký msToken dùng-một-lần do trang tự sinh nên
+    không thể tự gọi lại; cách duy nhất lấy product_id là bắt response thật.
+    Trả về list dict thô (product_id, title, giá...) hoặc [] nếu không bắt được.
     """
+    ws, err = _connect_cdp(cdp_port=cdp_port)
+    if ws is None:
+        if err:
+            print(f"[browser] {err}")
+        return []
+
+    pending: dict[str, str] = {}
+    seen: set[str] = set()
+    bodies: list[dict] = []
+    got = 0
+
+    try:
+        with ws:
+            ws.send(json.dumps({"id": 8900, "method": "Network.enable", "params": {}}))
+            time.sleep(0.3)
+            ws.send(json.dumps({"id": 8901, "method": "Page.reload", "params": {}}))
+
+            deadline = time.monotonic() + max(5.0, float(timeout_s))
+            while time.monotonic() < deadline:
+                try:
+                    msg = json.loads(ws.recv(timeout=3))
+                except Exception:
+                    continue
+                method = msg.get("method")
+
+                if method == "Network.responseReceived":
+                    url = msg["params"]["response"].get("url", "")
+                    if "/live_product/list" in url:
+                        pending[msg["params"]["requestId"]] = url
+                elif method == "Network.loadingFinished":
+                    rid = msg["params"]["requestId"]
+                    if rid in pending and rid not in seen:
+                        seen.add(rid)
+                        got += 1
+                        ws.send(json.dumps({
+                            "id": 8000 + got,
+                            "method": "Network.getResponseBody",
+                            "params": {"requestId": rid},
+                        }))
+                elif isinstance(msg.get("id"), int) and 8000 < msg["id"] <= 8100:
+                    try:
+                        payload = json.loads(msg.get("result", {}).get("body") or "{}")
+                    except Exception:
+                        continue
+                    items = ((payload.get("data") or {}).get("products")
+                             or (payload.get("data") or {}).get("list")
+                             or [])
+                    if items:
+                        bodies = items
+                        break
+    except Exception as e:
+        print(f"[browser] Lỗi harvest live products: {e}")
+    return bodies
+
+
+def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
+    """Đọc danh sách sản phẩm trong giỏ hàng live của dashboard TikTok Shop.
+
+    Nguồn chính là response /live_product/list bắt qua CDP Network (có product_id
+    thật để crawl chi tiết). Nếu chưa bắt được thì quét DOM virtual list làm dự
+    phòng (có số tồn kho nhưng không có id). Trạng thái ghim lấy từ DOM.
+    Trả về list dict: index, id, name, price, is_pinned, url, raw.
+    """
+    pinned_by_name: dict[str, bool] = {}
+    try:
+        dom = _scan_live_products_dom(cdp_port=cdp_port)
+        for p in dom:
+            pinned_by_name[p.get("name", "")[:60]] = bool(p.get("is_pinned"))
+    except Exception:
+        dom = []
+
+    raws = _harvest_live_products_network(cdp_port=cdp_port)
+
+    products: list[dict] = []
+    if raws:
+        for i, p in enumerate(raws, 1):
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("title") or "").strip()
+            if not name:
+                continue
+            pid = str(p.get("product_id") or "")
+            products.append({
+                "index": i,
+                "id": pid,
+                "name": name,
+                "price": str(p.get("format_available_price") or ""),
+                "is_pinned": pinned_by_name.get(name[:60], False),
+                "url": f"https://shop.tiktok.com/view/product/{pid}" if pid else "",
+                "raw": {
+                    "api": True,
+                    "stock_num": p.get("stock_num"),
+                    "origin_price": str(p.get("format_origin_price") or ""),
+                    "shop": ((p.get("seller_info") or {}).get("shop_name") or ""),
+                },
+            })
+        return products
+
+    # Dự phòng: DOM (không có id -> nút Load context-live sẽ bỏ qua sản phẩm đó)
+    return dom
+
+
+def _scan_live_products_dom(cdp_port: int = 30899) -> list[dict]:
+    """Quét DOM virtual list của dashboard. Dự phòng khi không bắt được API."""
     ws, err = _connect_cdp(cdp_port=cdp_port)
     if ws is None:
         if err:
@@ -1413,14 +1516,14 @@ def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
             data = _cdp_eval(ws, _CDP_PRODUCTS_JS, req_id=9001, timeout_s=20.0)
         if not isinstance(data, list):
             return []
-        products: list[dict] = []
+        out: list[dict] = []
         for i, p in enumerate(data, 1):
             if not isinstance(p, dict):
                 continue
             name = str(p.get("name") or "").strip()
             if not name:
                 continue
-            products.append({
+            out.append({
                 "index": int(p.get("index") or i),
                 "id": str(p.get("id") or ""),
                 "name": name,
@@ -1429,9 +1532,9 @@ def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
                 "url": str(p.get("url") or ""),
                 "raw": p.get("raw") if isinstance(p.get("raw"), dict) else {},
             })
-        return products
+        return out
     except Exception as e:
-        print(f"[browser] Lỗi fetch_live_products_cdp: {e}")
+        print(f"[browser] Lỗi _scan_live_products_dom: {e}")
         return []
 
 

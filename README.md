@@ -382,26 +382,37 @@ Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUO
 
 ### 13.1 Danh sách sản phẩm Live đọc từ browser (không dùng AI)
 
-Nút **🔄 Tải lại giỏ hàng live** (tab *Sản phẩm Live*) dùng CDP để đọc DOM trang
-`https://shop.tiktok.com/streamer/live/product/dashboard` và trả về:
+Nút **🔄 Tải lại giỏ hàng live** (tab *Sản phẩm Live*) đọc dashboard
+`https://shop.tiktok.com/streamer/live/product/dashboard` bằng 2 lớp:
+
+1. **Nguồn chính — bắt response `/live_product/list` qua CDP Network** (`Network.getResponseBody`).
+   Endpoint này cần chữ ký `msToken` dùng-một-lần do chính trang ký nên không thể tự gọi lại;
+   bắt response thật cho ra **product_id chuẩn** (35 sản phẩm, giá + tồn kho + shop).
+2. **Dự phòng — quét DOM virtual list.** Dashboard mới không dùng `<tr>`/`arco-table-tr` nữa
+   mà là `div.rounded-4.mb-8` (~90–200px) bên trong `[class*="virtualized-container"]`.
+   DOM có tên + giá + "Còn: ..." + "Lựa chọn yêu thích" nhưng **không có product_id**,
+   nên lớp này chỉ dùng khi chưa bắt được API.
+
+Trả về dict:
 
 | Trường | Nguồn lấy |
 |---|---|
-| `index` | số thứ tự tính lại theo bảng sau khi lọc |
-| `id` | `data-product-id`, `data-id`, `data-e2e`, hoặc query `product_id=` trong href |
-| `name` | `[class*="title"]`, `[class*="name"]`, `h3`, `h4`, hoặc dòng text đầu hợp lệ |
-| `price` | `[class*="price"]`, `[data-e2e*="price"]`, fallback regex `\d[\d.,]*\s*(₫|đ|VND|k)` |
-| `is_pinned` | text chứa "đang ghim"/"đang giới thiệu", hoặc class chứa `pin` |
-| `url` | href tuyệt đối của thẻ `<a>` trong row |
+| `index` | thứ tự trong danh sách API (hoặc DOM) |
+| `id` | `product_id` từ API; rỗng ở chế độ DOM dự phòng |
+| `name` | `title` từ API; hoặc dòng text dài đầu tiên trong row DOM |
+| `price` | `format_available_price`; hoặc leaf text dạng `35.000₫` |
+| `is_pinned` | DOM chứa "Lựa chọn yêu thích" (gắn qua tên sản phẩm khi có API) |
+| `url` | `https://shop.tiktok.com/view/product/<id>` |
 
-Logic **linh động**: thử 3 nhóm selector theo thứ tự ưu tiên (`arco-table-tr` → `tr`/`ProductItem` → `li`/`product`),
-nhóm nào ra kết quả thì dừng; dedupe theo `id`. **Không gọi AI** ở bước này.
+**Không gọi AI** ở bước này. Lấy danh sách cần reload trang dashboard
+(tương tự bấm nút refresh trên UI), không điều hướng đi chỗ khác.
 
 ### 13.2 Nút **📥 Load context-live**
 
 Thay cho nút *Lưu vào context-live* cũ. Với từng sản phẩm trong bảng:
 
-1. Mở link sản phẩm trong tab CDP, chờ `document.readyState === 'complete'`.
+1. Nhúng PDP vào **iframe ẩn cùng-origin trong tab dashboard** (không mở tab mới —
+   tab mới dính trang "Security Check" slide của TikTok), chờ load rồi đọc DOM.
 2. Lấy **tên**, **mô tả sản phẩm**, và **tối đa 10 comment/đánh giá đầu tiên**
    (nếu trang ít hơn thì lấy hết những gì có, kể cả 0).
 3. Ghi ra `context-live/` với tên file suy ra **từ tên sản phẩm** (slug bỏ dấu).

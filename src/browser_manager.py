@@ -28,6 +28,10 @@ from typing import Callable, Iterator
 _VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 CDP_SETUP_JS = r"""
 (() => {
+    if (window.__tiktok_cdp_interval) {
+        try { clearInterval(window.__tiktok_cdp_interval); } catch(e) {}
+        window.__tiktok_cdp_interval = null;
+    }
     if (window.__tiktok_cdp_observers && Array.isArray(window.__tiktok_cdp_observers)) {
         for (const o of window.__tiktok_cdp_observers) {
             try { o.disconnect(); } catch(e) {}
@@ -268,7 +272,7 @@ CDP_SETUP_JS = r"""
     }
 
     attachObservers();
-    setInterval(attachObservers, 2000);
+    window.__tiktok_cdp_interval = setInterval(attachObservers, 2000);
 
     const cTarget = findChatList();
     const aTarget = findActivityList();

@@ -173,6 +173,8 @@ def handle_run(args) -> int:
                         context_live_dir = str(new_cfg.get("context_live_dir", context_live_dir))
                         collector.set_user_cooldown(float(new_cfg.get("greeting_user_cooldown_s", 180.0)))
                         collector.set_max_join_history(int(new_cfg.get("greeting_max_batch", 5)))
+                        queue.interrupt_mode = str(new_cfg.get("interrupt_mode", queue.interrupt_mode))
+                        queue._dry_run = bool(new_cfg.get("no_play", queue._dry_run))
                         print(f"[config] Đã cập nhật và áp dụng cấu hình mới nhất từ {cfg_path.name}", flush=True)
                 except Exception:
                     pass
@@ -265,9 +267,9 @@ def handle_run(args) -> int:
                 except Exception as e:
                     print(f"[run/remind] Lỗi nhắc tương tác: {e}", flush=True)
 
-    if remind_enabled:
-        r_thread = threading.Thread(target=remind_worker, daemon=True, name="remind-loop")
-        r_thread.start()
+    # Luon khoi chay remind_worker (ben trong kiem tra dong r_en tu config de ho tro hot-reload)
+    r_thread = threading.Thread(target=remind_worker, daemon=True, name="remind-loop")
+    r_thread.start()
     def worker(ev: dict) -> None:
         spoke = False
         try:

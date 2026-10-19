@@ -309,7 +309,10 @@ class _Field:
             if doc_text:
                 ToolTip(self.widget, doc_text)
         else:
-            self.var = tk.StringVar(value="" if self.original is None else str(self.original))
+            if self.key == "analyst_llm_model" and hasattr(app, "analyst_model_var"):
+                self.var = app.analyst_model_var
+            else:
+                self.var = tk.StringVar(value="" if self.original is None else str(self.original))
             if self.key == "audio_device":
                 self.widget = ttk.Combobox(parent, textvariable=self.var, values=app._device_labels(), width=46)
             elif self.key in getattr(settings, "FIELD_OPTIONS", {}):
@@ -1733,16 +1736,6 @@ class App:
                 errors.append(f"{f.key}={f.var.get()!r} không phải số hợp lệ")
         if errors:
             raise ValueError("; ".join(errors))
-
-        # Dong bo model AI phan tich tu tab Quan ly Prompt (neu co thay doi)
-        if hasattr(self, "analyst_model_var"):
-            m = self.analyst_model_var.get().strip()
-            if m:
-                cfg["analyst_llm_model"] = m
-                for f in self.fields:
-                    if f.key == "analyst_llm_model":
-                        f.var.set(m)
-                        break
 
         return cfg
 

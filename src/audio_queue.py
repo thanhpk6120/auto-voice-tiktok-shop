@@ -15,7 +15,7 @@ from __future__ import annotations
 import itertools
 import queue
 import threading
-
+import time
 INTERRUPT_PRIORITY = 1
 
 
@@ -159,4 +159,6 @@ class PriorityAudioQueue:
                     self._on_finish(item)
                 except Exception:
                     pass
+            # Khoang nghi tu nhien giua 2 cau phat lien tiep
+            time.sleep(0.08)
             self._interrupt.clear()

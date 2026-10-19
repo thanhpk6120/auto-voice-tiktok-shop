@@ -75,14 +75,26 @@ def output_device_name() -> str:
         return f"error: {type(e).__name__}: {e}"
 
 
-def play_wav(wav_path: str | Path, stop_event=None) -> bool:
-    """Phat file wav. Tra False neu bi ngat (stop_event duoc set) giua chung."""
+def play_wav(wav_path: str | Path, stop_event=None, tail_padding_s: float = 0.25) -> bool:
+    """Phat file wav. Tra False neu bi ngat (stop_event duoc set) giua chung.
+    tail_padding_s: them khoang lang o cuoi buffer va doi buffer driver xa het
+    de dam bao tu cuoi cung khong bi cat cut boi hardware / driver buffer."""
     if stop_event is not None and stop_event.is_set():
         return False
 
     if _SD_OK:
         try:
             data, rate = _read_wav(wav_path)
+            # Chen them khoang lang vao cuoi data de buffer phan cung / driver
+            # khong cat cut tu cuoi truoc khi kip phat het
+            if tail_padding_s > 0:
+                pad_frames = int(rate * tail_padding_s)
+                if getattr(data, "ndim", 1) == 1:
+                    pad = np.zeros(pad_frames, dtype=data.dtype)
+                else:
+                    pad = np.zeros((pad_frames, data.shape[1]), dtype=data.dtype)
+                data = np.concatenate([data, pad])
+
             sd.play(data, rate, device=_resolve_device())
             stream = sd.get_stream()
             while stream is not None and stream.active:
@@ -90,6 +102,9 @@ def play_wav(wav_path: str | Path, stop_event=None) -> bool:
                     sd.stop()
                     return False
                 time.sleep(0.02)
+            # Cho them mot chut de driver/hardware xa sach audio buffer
+            if tail_padding_s > 0:
+                time.sleep(min(0.12, tail_padding_s))
             return True
         except Exception:
             pass  # roi ve winsound

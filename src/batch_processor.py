@@ -186,6 +186,7 @@ class BatchEventCollector:
         self,
         max_join_history: int = 5,
         max_high_priority: int = 20,
+        greeting_user_cooldown_s: float = 180.0,
         on_event=None,
     ):
         self._lock = threading.Lock()
@@ -193,11 +194,20 @@ class BatchEventCollector:
         self._latest_joins: list[str] = []
         self._latest_viewing: dict[str, dict] = {}
         self._other_activities: list[dict] = []
+        self._user_greeting_history: dict[str, float] = {}
+        self._greeting_user_cooldown_s = max(0.0, float(greeting_user_cooldown_s))
         self._event_trigger = threading.Event()
         self._max_join_history = max_join_history
         self._max_high_priority = max(1, int(max_high_priority))
         self._on_event = on_event
 
+    def set_user_cooldown(self, cooldown_s: float) -> None:
+        with self._lock:
+            self._greeting_user_cooldown_s = max(0.0, float(cooldown_s))
+
+    def set_max_join_history(self, count: int) -> None:
+        with self._lock:
+            self._max_join_history = max(1, int(count))
     def wake(self) -> None:
         """Danh thuc worker dang cho (vd: vua phat xong audio, co su kien moi cho san)."""
         self._event_trigger.set()
@@ -230,15 +240,27 @@ class BatchEventCollector:
                 self._high_priority.append(dict(event))
                 notify = True
             elif typ in ("join", "joined", "greeting"):
-                if usr and usr not in ("Khách", "bạn mới"):
+                now = time.monotonic()
+                if self._greeting_user_cooldown_s > 0 and len(self._user_greeting_history) > 500:
+                    cutoff = now - self._greeting_user_cooldown_s
+                    self._user_greeting_history = {
+                        u: t for u, t in self._user_greeting_history.items() if t >= cutoff
+                    }
+                last_g = self._user_greeting_history.get(usr)
+                if last_g is not None and (now - last_g < self._greeting_user_cooldown_s):
+                    # Da chao trong vong cooldown -> bo qua, tranh chao lap lai
+                    pass
+                elif usr and usr not in ("Khách", "bạn mới"):
                     if usr in self._latest_joins:
                         self._latest_joins.remove(usr)
                     self._latest_joins.append(usr)
                     if len(self._latest_joins) > self._max_join_history:
                         self._latest_joins.pop(0)
+                    # Neu da gom du nguoi cho 1 batch chao -> thuc day ngay de phat
+                    if len(self._latest_joins) >= self._max_join_history:
+                        notify = True
             else:
                 self._other_activities = [dict(event)]
-
             self._enforce_cap_locked()
 
         if notify:
@@ -283,7 +305,9 @@ class BatchEventCollector:
                 events.append(v)
             self._latest_viewing.clear()
 
+            now = time.monotonic()
             for u in self._latest_joins:
+                self._user_greeting_history[u] = now
                 events.append({"type": "join", "user": u, "text": f"{u} vừa vào phòng"})
             self._latest_joins.clear()
 

@@ -83,13 +83,20 @@ CDP_SETUP_JS = r"""
         return false;
     }
 
-    const seenRecent = new Set();
+    const seenRecent = new Map();
     function pushEvent(type, user, content, source, raw) {
+        const now = Date.now();
         const key = type + '|' + (user || '') + '|' + (content || '');
-        if (seenRecent.has(key)) return;
-        seenRecent.add(key);
-        setTimeout(() => seenRecent.delete(key), 3000);
-
+        // Dọn bớt các mục cũ quá 120 giây khi bộ nhớ lớn
+        if (seenRecent.size > 500) {
+            for (const [k, t] of seenRecent.entries()) {
+                if (now - t > 120000) seenRecent.delete(k);
+            }
+        }
+        const lastTime = seenRecent.get(key);
+        // Chống lặp sự kiện cùng loại/user/nội dung trong vòng 120 giây (tránh virtual DOM re-render)
+        if (lastTime && (now - lastTime < 120000)) return;
+        seenRecent.set(key, now);
         window.__tiktok_cdp_queue_v2.push({
             type: type,
             user: user || 'Khách',

@@ -108,8 +108,12 @@ def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
-    collector = BatchEventCollector()
-
+    greeting_user_cooldown_s = float(os.getenv("GREETING_USER_COOLDOWN_S", "180.0"))
+    greeting_max_batch = int(os.getenv("GREETING_MAX_BATCH", "5"))
+    collector = BatchEventCollector(
+        max_join_history=greeting_max_batch,
+        greeting_user_cooldown_s=greeting_user_cooldown_s,
+    )
     def on_audio_finish(item):
         # Vua phat xong audio -> danh thuc worker lay ngay su kien moi nhat da gom.
         # Cac su kien den trong luc dang phat/tao voice khong bi mat, chi giu ban moi nhat.
@@ -127,7 +131,7 @@ def handle_run(args) -> int:
     batch_window_s = float(
         getattr(args, "batch_window_s", None)
         if getattr(args, "batch_window_s", None) is not None
-        else os.getenv("BATCH_WINDOW_S", "5.0")
+        else os.getenv("BATCH_WINDOW_S", "3.0")
     )
     batch_max_events = int(
         getattr(args, "batch_max_events", None)
@@ -141,12 +145,41 @@ def handle_run(args) -> int:
     context_live_dir = os.getenv("CONTEXT_LIVE_DIR", "context-live")
 
     def batch_worker():
+        nonlocal batch_window_s, batch_max_events, prompts_dir, context_dir, context_live_dir
+        last_cfg_mtime = 0.0
+        cfg_path = None
+        try:
+            import settings
+            cfg_path = settings.config_path()
+            if cfg_path.is_file():
+                last_cfg_mtime = cfg_path.stat().st_mtime
+        except Exception:
+            pass
+
         while not stop_event.is_set():
+            # Kiem tra neu nguoi dung bam 'Luu cau hinh' tu GUI trong khi tien trinh dang chay
+            if cfg_path and cfg_path.is_file():
+                try:
+                    curr_mtime = cfg_path.stat().st_mtime
+                    if curr_mtime > last_cfg_mtime:
+                        last_cfg_mtime = curr_mtime
+                        import settings
+                        new_cfg = settings.load()
+                        settings.apply(new_cfg)
+                        batch_window_s = float(new_cfg.get("batch_window_s", batch_window_s))
+                        batch_max_events = int(new_cfg.get("batch_max_events", batch_max_events))
+                        prompts_dir = str(new_cfg.get("prompts_dir", prompts_dir))
+                        context_dir = str(new_cfg.get("context_dir", context_dir))
+                        context_live_dir = str(new_cfg.get("context_live_dir", context_live_dir))
+                        collector.set_user_cooldown(float(new_cfg.get("greeting_user_cooldown_s", 180.0)))
+                        collector.set_max_join_history(int(new_cfg.get("greeting_max_batch", 5)))
+                        print(f"[config] Đã cập nhật và áp dụng cấu hình mới nhất từ {cfg_path.name}", flush=True)
+                except Exception:
+                    pass
+
             # Thuc day khi: (a) co su kien uu tien cao vao hang doi, (b) vua phat xong
             # audio -> lay ngay su kien moi nhat, hoac (c) het cua so batch_window_s.
-            # -> Tao text/voice khong phai cho nhau het cua so.
             collector.wait_for_batch(timeout=batch_window_s)
-
             evs = collector.drain()
             if not evs:
                 continue  # Không có sự kiện mới -> KHÔNG gọi LLM
@@ -198,17 +231,32 @@ def handle_run(args) -> int:
         import random
         from event_analyzer import phoneticize_vietnamese
         while not stop_event.is_set():
-            delay = random.uniform(remind_min_s, remind_max_s)
+            # Doc dong thoi cau hinh nhac nho tu settings (neu vua duoc Luu tu GUI)
+            r_en = remind_enabled
+            r_txt = remind_text
+            r_min = remind_min_s
+            r_max = remind_max_s
+            try:
+                import settings
+                cur_cfg = settings.get()
+                r_en = bool(cur_cfg.get("remind_enabled", r_en))
+                r_txt = str(cur_cfg.get("remind_text", r_txt))
+                r_min = float(cur_cfg.get("remind_min_s", r_min))
+                r_max = float(cur_cfg.get("remind_max_s", r_max))
+            except Exception:
+                pass
+
+            delay = random.uniform(r_min, r_max)
             elapsed = 0.0
             while elapsed < delay and not stop_event.is_set():
                 time.sleep(0.5)
                 elapsed += 0.5
-            if stop_event.is_set() or not remind_enabled:
+            if stop_event.is_set() or not r_en:
                 continue
 
             # Chỉ đọc nhắc nhở khi hàng đợi rảnh (không chen ngang khách hỏi hàng/đơn hàng)
             if queue.qsize() <= 1 and not collector.has_high_priority():
-                spoken_text = phoneticize_vietnamese(remind_text)
+                spoken_text = phoneticize_vietnamese(r_txt)
                 try:
                     wav = synthesize(spoken_text)
                     if wav:

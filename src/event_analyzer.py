@@ -11,15 +11,32 @@ from pathlib import Path
 class GreetingBatcher:
     """Gộp user join trong window cooldown thành một câu chào."""
 
-    def __init__(self, cooldown: float = 3.0, max_batch: int = 5, templates: list[str] | None = None):
+    def __init__(
+        self,
+        cooldown: float = 3.0,
+        max_batch: int = 5,
+        templates: list[str] | None = None,
+        user_cooldown: float = 180.0,
+    ):
         self.cooldown = cooldown
         self.max_batch = max(1, int(max_batch))
         self.templates = templates or ["Chào", "Xin chào", "Hê-lô", "Goắt-sắp"]
+        self.user_cooldown = max(0.0, float(user_cooldown))
         self._users: list[str] = []
         self._window_start: float | None = None
-
+        self._user_history: dict[str, float] = {}
     def add(self, user: str) -> str | None:
         now = time.monotonic()
+        # Chống lặp chào lại cùng một người trong thời gian ngắn
+        if self.user_cooldown > 0:
+            if len(self._user_history) > 500:
+                cutoff = now - self.user_cooldown
+                self._user_history = {u: t for u, t in self._user_history.items() if t >= cutoff}
+            last_t = self._user_history.get(user)
+            if last_t is not None and (now - last_t < self.user_cooldown):
+                return None
+            self._user_history[user] = now
+
         if self._window_start is not None and self._users:
             if now - self._window_start >= self.cooldown:
                 done = self.flush()
@@ -602,22 +619,6 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
     return ""
 
 
-def configure(prompts_dir=None, context_dir=None, cooldown=None, max_batch=None, max_words=None) -> None:
-    """Ap cau hinh runtime; tham so None giu gia tri hien tai."""
-    global _PROMPTS_DIR, _CONTEXT_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
-    if prompts_dir is not None:
-        _PROMPTS_DIR = str(prompts_dir)
-    if context_dir is not None:
-        _CONTEXT_DIR = str(context_dir)
-        _intent = None
-    if max_batch is not None:
-        _MAX_BATCH = max(1, int(max_batch))
-    if max_words is not None:
-        _MAX_WORDS = max(1, int(max_words))
-    _batcher = GreetingBatcher(
-        cooldown=_DEFAULT_COOLDOWN if cooldown is None else float(cooldown),
-        max_batch=_MAX_BATCH,
-    )
 _intent: ChatIntent | None = None
 _batcher: GreetingBatcher | None = None
 
@@ -629,6 +630,7 @@ def configure(
     cooldown=None,
     max_batch=None,
     max_words=None,
+    user_cooldown=None,
 ) -> None:
     """Ap cau hinh runtime; tham so None giu gia tri hien tai."""
     global _PROMPTS_DIR, _CONTEXT_DIR, _CONTEXT_LIVE_DIR, _MAX_BATCH, _MAX_WORDS, _intent, _batcher
@@ -647,8 +649,8 @@ def configure(
     _batcher = GreetingBatcher(
         cooldown=_DEFAULT_COOLDOWN if cooldown is None else float(cooldown),
         max_batch=_MAX_BATCH,
+        user_cooldown=180.0 if user_cooldown is None else float(user_cooldown),
     )
-
 
 def reload_intent() -> None:
     """Làm mới bộ nhớ đệm ChatIntent để đọc lại các file context mới nhất."""

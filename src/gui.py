@@ -398,7 +398,9 @@ class _Field:
 class App:
     def __init__(self, root, cfg: dict | None = None):
         self.root = root
-        self.cfg = dict(cfg if cfg is not None else settings.load())
+        base_cfg = dict(settings.DEFAULTS)
+        base_cfg.update(settings.load() if cfg is None else cfg)
+        self.cfg = base_cfg
         self.proc: subprocess.Popen | None = None
         self._proc_start_time: float | None = None
         self.log_q: "queue.Queue[str]" = queue.Queue()
@@ -1721,7 +1723,7 @@ class App:
         ttk.Button(row_dl, text="Tải và Cài đặt", command=_start_download).pack(side="left", padx=6)
 
     def collect(self) -> dict:
-        """Doc form -> cfg. ValueError neu co o so sai dinh dang."""
+        """Doc form -> cfg tu tat ca cac tab. ValueError neu co o so sai dinh dang."""
         cfg = dict(self.cfg)
         errors = []
         for f in self.fields:
@@ -1731,27 +1733,61 @@ class App:
                 errors.append(f"{f.key}={f.var.get()!r} không phải số hợp lệ")
         if errors:
             raise ValueError("; ".join(errors))
+
+        # Dong bo model AI phan tich tu tab Quan ly Prompt (neu co thay doi)
+        if hasattr(self, "analyst_model_var"):
+            m = self.analyst_model_var.get().strip()
+            if m:
+                cfg["analyst_llm_model"] = m
+                for f in self.fields:
+                    if f.key == "analyst_llm_model":
+                        f.var.set(m)
+                        break
+
         return cfg
 
     def save(self) -> None:
         try:
             cfg = self.collect()
             path = settings.save(cfg)
-            settings.apply(cfg)
-            self.cfg = cfg
+            applied = settings.apply(cfg)
+            self.cfg = applied
+
+            # Luu luon file prompt neu nguoi dung dang go sua o tab Quan ly Prompt
+            try:
+                if hasattr(self, "prompt_pick_var") and hasattr(self, "prompt_edit"):
+                    p_name = self.prompt_pick_var.get().strip()
+                    p_content = self.prompt_edit.get("1.0", "end-1c")
+                    if p_name and p_content.strip():
+                        p_file = self._prompts_dir() / f"{p_name}.md"
+                        p_file.write_text(p_content, encoding="utf-8")
+                        self._write(f"[prompts] Đã lưu nội dung prompt: {p_file.name}")
+            except Exception as e:
+                self._write(f"[prompts] Lỗi lưu file prompt: {e}")
+
+            status_msg = f"[save] Đã lưu và áp dụng toàn bộ cấu hình từ tất cả các tab vào: {path}"
+            if self.proc is not None and self.proc.poll() is None:
+                status_msg += " (tiến trình đang chạy tự động áp dụng ngay lập tức)"
+            self._write(status_msg)
+            if messagebox:
+                messagebox.showinfo(
+                    "Đã lưu cấu hình",
+                    f"Toàn bộ cấu hình từ tất cả các tab đã được lưu vào:\n{path}\n\nvà đã được áp dụng ngay lập tức cho phiên chạy!",
+                )
         except Exception as e:
             self._write(f"[save] lỗi: {type(e).__name__}: {e}")
-            return
-        self._write(f"[save] đã lưu + áp dụng: {path}")
+            if messagebox:
+                messagebox.showerror("Lỗi lưu cấu hình", str(e))
 
     def reload(self) -> None:
         self.cfg = settings.load()
         for f in self.fields:
             if f.key in self.cfg:
                 f.set_value(self.cfg[f.key])
+        if hasattr(self, "analyst_model_var"):
+            self.analyst_model_var.set(str(self.cfg.get("analyst_llm_model", "")))
         self._fill_devices()
         self._write("đã đọc lại config từ đĩa")
-
     def open_config(self) -> None:
         path = settings.config_path()
         self._write(f"[config] {path}")

@@ -53,10 +53,11 @@ DEFAULTS: dict = {
     "prompts_dir": "prompts",
     "context_dir": "context-data",
     "context_live_dir": "context-live",
-    "batch_window_s": 5.0,
+    "batch_window_s": 3.0,
     "batch_max_events": 10,
     "out_dir": "out",
     "greeting_cooldown_s": 3.0,
+    "greeting_user_cooldown_s": 180.0,
     "greeting_max_batch": 5,
     "sales_max_words": 75,
     "remind_enabled": True,
@@ -105,6 +106,7 @@ SECTIONS: dict = {
         "remind_text",
         "out_dir",
         "greeting_cooldown_s",
+        "greeting_user_cooldown_s",
         "greeting_max_batch",
     ],
     "Trình duyệt / GoLogin": [
@@ -156,6 +158,7 @@ FIELD_DOCS: dict[str, str] = {
     "sales_max_words": "Độ dài tối đa của câu tư vấn sản phẩm (50-100 từ) giúp câu trả lời đầy đủ thông tin chi tiết.",
     "remind_enabled": "Bật/Tắt tính năng đọc định kỳ câu nhắc người xem thả tim và bình luận.",
     "remind_min_s": "Thời gian ngẫu nhiên tối thiểu (giây) giữa 2 lần đọc câu nhắc tương tác.",
+    "greeting_user_cooldown_s": "Thời gian không chào lại cùng một người xem (giây, mặc định 180s = 3 phút), tránh bị đọc lặp lại tên người xem nhiều lần.",
     "remind_max_s": "Thời gian ngẫu nhiên tối đa (giây) giữa 2 lần đọc câu nhắc tương tác.",
     "remind_text": "Nội dung câu thoại nhắc nhở khán giả thả tim và tương tác trên live.",
     "out_dir": "Thư mục lưu trữ các file âm thanh .wav được tạo ra.",
@@ -300,8 +303,12 @@ def _bridge_port_from_url(url: str, fallback: int) -> int:
 
 def apply(cfg: dict | None = None) -> dict:
     """Ap cau hinh vao cac module runtime. An toan neu module chua import duoc."""
-    cfg = dict(cfg) if cfg is not None else get()
-
+    merged = dict(DEFAULTS)
+    if cfg is not None:
+        merged.update(cfg)
+    else:
+        merged.update(get())
+    cfg = merged
     # tts_client
     try:
         import tts_client  # type: ignore
@@ -340,8 +347,10 @@ def apply(cfg: dict | None = None) -> dict:
             _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))
             _mod.CONTEXT_DIR = str(cfg.get("context_dir", "context-data"))
             _mod.CONTEXT_LIVE_DIR = str(cfg.get("context_live_dir", "context-live"))
-            _mod.BATCH_WINDOW_S = float(cfg.get("batch_window_s", 5.0))
+            _mod.BATCH_WINDOW_S = float(cfg.get("batch_window_s", 3.0))
             _mod.BATCH_MAX_EVENTS = int(cfg.get("batch_max_events", 10))
+            _mod.GREETING_COOLDOWN_S = float(cfg.get("greeting_cooldown_s", 3.0))
+            _mod.GREETING_USER_COOLDOWN_S = float(cfg.get("greeting_user_cooldown_s", 180.0))
             _mod.SALES_MAX_WORDS = int(cfg.get("sales_max_words", 75))
             _mod.REMIND_ENABLED = bool(cfg.get("remind_enabled", True))
             _mod.REMIND_MIN_S = float(cfg.get("remind_min_s", 60.0))
@@ -361,9 +370,10 @@ def apply(cfg: dict | None = None) -> dict:
             prompts_dir=cfg.get("prompts_dir", "prompts"),
             context_dir=cfg.get("context_dir", "context-data"),
             context_live_dir=cfg.get("context_live_dir", "context-live"),
-            cooldown=float(cfg["greeting_cooldown_s"]),
-            max_batch=int(cfg["greeting_max_batch"]),
-            max_words=int(cfg["sales_max_words"]),
+            cooldown=float(cfg.get("greeting_cooldown_s", 3.0)),
+            max_batch=int(cfg.get("greeting_max_batch", 5)),
+            max_words=int(cfg.get("sales_max_words", 75)),
+            user_cooldown=float(cfg.get("greeting_user_cooldown_s", 180.0)),
         )
     except Exception:
         pass
@@ -375,8 +385,10 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["BROWSER_MODE"] = str(cfg.get("browser_mode", "gologin_cdp"))
     os.environ["PROMPTS_DIR"] = str(cfg.get("prompts_dir", "prompts"))
     os.environ["CONTEXT_DIR"] = str(cfg.get("context_dir", "context-data"))
-    os.environ["BATCH_WINDOW_S"] = str(cfg.get("batch_window_s", 5.0))
+    os.environ["BATCH_WINDOW_S"] = str(cfg.get("batch_window_s", 3.0))
     os.environ["BATCH_MAX_EVENTS"] = str(cfg.get("batch_max_events", 10))
+    os.environ["GREETING_COOLDOWN_S"] = str(cfg.get("greeting_cooldown_s", 3.0))
+    os.environ["GREETING_USER_COOLDOWN_S"] = str(cfg.get("greeting_user_cooldown_s", 180.0))
     os.environ["CONTEXT_LIVE_DIR"] = str(cfg.get("context_live_dir", "context-live"))
     os.environ["SALES_MAX_WORDS"] = str(cfg.get("sales_max_words", 75))
     os.environ["REMIND_ENABLED"] = "true" if cfg.get("remind_enabled", True) else "false"

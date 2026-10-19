@@ -60,11 +60,21 @@ class GreetingBatcher:
     def flush(self) -> str | None:
         if not self._users:
             return None
-        template = random.choice(self.templates)
         users = list(self._users)
         self._users.clear()
         self._window_start = None
-        return f"{template} {', '.join(users)}!"
+        names = ", ".join(users)
+        # Ưu tiên mẫu chưa dùng trong 10 câu gần nhất để không lặp đi lặp lại
+        candidates = [f"{t} {names}!" for t in self.templates]
+        picked = None
+        try:
+            import phrase_cache
+
+            picked = phrase_cache.pick_unused("greeting", candidates) or random.choice(candidates)
+            phrase_cache.remember("greeting", picked)
+        except Exception:
+            picked = None
+        return picked or random.choice(candidates)
 
 
 def _project_root() -> Path:
@@ -548,6 +558,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "3. Gọi đúng tên khách, mời khách ở lại xem live và bấm giỏ hàng.\n"
             "4. PHIÊN ÂM 100% chữ số thành chữ; phiên âm từ mượn (shop -> sóp, live -> lai, deal -> điu).\n"
             "5. Không markdown, không bullet, không emoji.\n"
+            "6. Không lặp lại bất kỳ câu nào trong danh sách 'CÂU GẦN NHẤT ĐÃ DÙNG' (nếu có).\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
             'JSON mẫu: {"speak_text": "Xin chào Minh Tuấn đã ghé thăm gian hàng, sóp vui lắm, bạn ở lại xem lai nhé!", "kind": "greeting", "priority": 3}'
         )
@@ -736,6 +747,14 @@ def generate_by_intent(
         ctx_parts.append(f"- Nguồn dữ liệu: {'context-live' if product.get('live') else 'context-data'}")
     if context_note:
         ctx_parts.append(context_note)
+    if intent == "greeting":
+        try:
+            import phrase_cache
+            block = phrase_cache.avoid_block("greeting")
+            if block:
+                ctx_parts.append(block)
+        except Exception:
+            pass
     ctx_parts.append(f'Khách "{u}" vừa bình luận: "{text}"')
 
     user_prompt = "\n".join(ctx_parts)
@@ -758,18 +777,40 @@ def generate_by_intent(
         if intent == "greeting":
             return _greeting_fallback(u)
         return answer_general_chat(user, text)
-    return phoneticize_vietnamese(clean_speak_text(speak, max_words=_MAX_WORDS))
+    final_text = phoneticize_vietnamese(clean_speak_text(speak, max_words=_MAX_WORDS))
+    if intent == "greeting":
+        try:
+            import phrase_cache
+
+            phrase_cache.remember("greeting", final_text)
+        except Exception:
+            pass
+    return final_text
 
 
 def _greeting_fallback(user: str) -> str:
-    """Câu chào dự phòng khi LLM lỗi/không trả về nội dung."""
+    """Câu chào dự phòng khi LLM lỗi/không trả về nội dung (ưu tiên câu chưa dùng)."""
     templates = [
         f"Chào {user}, sóp đây! Bạn đang ngắm món ăn vặt nào thế nè?",
         f"Dạ sóp chào {user}, sóp nghe đây ạ! Bạn bấm giỏ hàng góc trái xem món ngon nhé!",
         f"Chào {user}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
         f"Chào {user}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
+        f"Úi {user} ghé rồi, sóp chào bạn nha, ở lại xem lai cùng sóp cho vui!",
+        f"Sóp chào {user} nha, cả nhà đang xem lai vui lắm, bạn vào xem chung luôn!",
+        f"Chào mừng {user} đến gian hàng, sóp có nhiều món đang giảm giá, bạn xem thử nhé!",
+        f"{user} ơi, sóp chào bạn! Bạn cứ thoải mái xem lai, cần gì nhắn sóp liền nha!",
+        f"Ơ {user} tới rồi à, sóp vui quá, bạn ở lại xem lai với sóp nhé!",
+        f"Chào {user} đã ghé gian hàng, sóp gửi bạn một tràng pháo tay, xem lai vui nha!",
     ]
-    return phoneticize_vietnamese(random.choice(templates))
+    picked = None
+    try:
+        import phrase_cache
+        picked = phrase_cache.pick_unused("greeting", templates)
+    except Exception:
+        pass
+    return phoneticize_vietnamese(picked or random.choice(templates))
+
+
 
 
 def answer_by_intent(user: str, text: str, products: list[dict] | None = None) -> dict:
@@ -829,7 +870,22 @@ def answer_general_chat(user: str, text: str) -> str:
             f"Chào {u}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
             f"Chào {u}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
         ]
-        return phoneticize_vietnamese(random.choice(fast_replies))
+        picked = None
+        try:
+            import phrase_cache
+
+            picked = phrase_cache.pick_unused("greeting", [phoneticize_vietnamese(x) for x in fast_replies])
+        except Exception:
+            picked = None
+        if not picked:
+            picked = phoneticize_vietnamese(random.choice(fast_replies))
+        try:
+            import phrase_cache
+
+            phrase_cache.remember("greeting", picked)
+        except Exception:
+            pass
+        return picked
 
     # 2. Các bình luận giao tiếp khác -> gọi LLM đóng vai streamer đáp lại tự nhiên
     system = get_prompt("system_chat")

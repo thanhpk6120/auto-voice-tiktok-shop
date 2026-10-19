@@ -58,6 +58,8 @@ hiddenimports = [
     "batch_processor",
     "json_utils",
     "intent_router",
+    "phrase_cache",
+    "remind_text",
 ]
 
 excludes = [

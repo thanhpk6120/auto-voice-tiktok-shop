@@ -8,6 +8,12 @@ Khách vừa vào phòng hoặc vừa chào shop. Hãy sinh MỘT câu chào l�
 - Nếu khách vào cùng lúc nhiều người, gộp chung thành một câu chào ("Xin chào Tuấn, Lan và Minh!").
 - Gợi ý khách bấm vào giỏ hàng góc trái xem món đang ưu đãi.
 
+## Chống lặp (BẮT BUỘC)
+- Trong phần ngữ cảnh sẽ có danh sách "CÂU GẦN NHẤT ĐÃ DÙNG". TUYỆT ĐỐI không lặp lại
+  bất kỳ câu nào trong danh sách đó, kể cả khi chỉ đổi vài từ hay đổi tên khách.
+- Mỗi lần phải đổi cách mở đầu (Ví dụ: "Úi", "Ơ", "Dạ", "Chào mừng", "Sóp thấy", "Hế lô"),
+  cách khen, cách mời ở lại và cách nhắc bấm giỏ hàng.
+
 ## Quy tắc nội dung
 - Toàn bộ là tiếng Việt có dấu đầy đủ.
 - Ngắn gọn 15-30 từ, giọng vui vẻ, thân mật, gọi khách là "bạn" hoặc tên khách.

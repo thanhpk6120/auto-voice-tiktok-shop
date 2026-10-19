@@ -343,8 +343,19 @@ Bằng chứng build + config override: [`docs/TEST-BUILD.md`](docs/TEST-BUILD.m
 
 - `remind_enabled`: bật/tắt (mặc định **bật**).
 - `remind_min_s` / `remind_max_s`: khoảng random giây giữa 2 lần nhắc (mặc định 60–120s).
-- `remind_text`: nội dung câu nhắc, mặc định *"Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn"*.
+- `remind_text`: câu nhắc gốc, mặc định *"Mọi người xem lai nhớ cho sốp xin một tim và com men sản phẩm cần tư vấn nhé, sốp cảm ơn"*.
 - Chỉ đọc khi hàng đợi rảnh — **không chen ngang** khách hỏi hàng/chốt đơn.
+
+**Bộ 10 câu nhắc khác nhau (`src/remind_text.py`)**
+
+Từ câu gốc, app sinh thêm **9 câu khác** (tổng 10) rồi phát ngẫu nhiên, không lặp:
+
+| Bước | Xử lý |
+|---|---|
+| 1 | Gọi LLM (`llm_base_url`/`llm_model`) viết lại câu gốc thành 9 cách nói khác nhau |
+| 2 | LLM lỗi/offline → dựng 9 biến thể cục bộ từ chính câu gốc (openers × hành động × kết câu) |
+| 3 | Cache bộ 10 câu vào `local_cache/pool_remind.json` theo **signature = nội dung câu gốc**; đổi `remind_text` mới sinh lại |
+| 4 | Mỗi lần phát, `phrase_cache.pick_unused` chọn câu **chưa nằm trong 10 lần phát gần nhất** |
 
 ### 12.5 Tư vấn sản phẩm dài & nhiều thông tin hơn
 
@@ -539,7 +550,26 @@ Sự kiện này đi qua đúng luồng phân tích: đối chiếu sản phẩm
 **context-data**, rồi gọi LLM với prompt `system_sales` để tư vấn đúng sản phẩm. Mẫu câu cứng chỉ
 dùng khi LLM lỗi.
 
-### 13.7 Ngôn ngữ trong app
+### 13.7 Chống lặp câu chào (`src/phrase_cache.py`)
+
+Mọi câu chào đã phát được ghi vào `local_cache/recent_greeting.json` (giữ đúng **10 câu gần nhất**).
+
+| Điểm chặn | Cách xử lý |
+|---|---|
+| LLM sinh câu chào (`generate_by_intent` intent `greeting`) | Chèn khối *"10 CÂU GẦN NHẤT ĐÃ DÙNG … TUYỆT ĐỐI KHÔNG lặp lại"* vào **user prompt** trước khi gọi LLM |
+| Batch (`process_event_batch`, nhóm `greeting`) | Cùng khối `avoid_block` chèn vào `ctx_str` gửi LLM |
+| `GreetingBatcher.flush` (gộp nhiều người vào cùng lúc) | Chọn mẫu **chưa dùng** trong 10 câu gần nhất (`pick_unused`) |
+| Câu đáp nhanh "shop ơi / alo" | `pick_unused` trên 4 mẫu, hết mẫu mới lặp |
+| LLM lỗi hoàn toàn | `_greeting_fallback` có **10 mẫu**, cũng chọn theo `pick_unused` |
+| Remind | `local_cache/recent_remind.json` giữ 10 câu nhắc gần nhất |
+
+Sau khi phát, `phrase_cache.remember(kind, text)` ghi lại (chống ghi trùng liền kề nhau).
+Chuẩn hoá so trùng: bỏ dấu câu, gộp khoảng trắng, lowercase — nên "Chào A!" và "chào a" tính là trùng.
+
+> So sánh câu chào mới với 10 câu cũ được làm **hai lớp**: (1) LLM được yêu cầu tránh, (2) cache
+> vẫn ghi nhận để lần sau danh sách "cấm" được cập nhật.
+
+### 13.8 Ngôn ngữ trong app
 
 Toàn bộ chuỗi hiển thị (log, tooltip, label, hộp thoại, `--help`) dùng **tiếng Việt có dấu**:
 

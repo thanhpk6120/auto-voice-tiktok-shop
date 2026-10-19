@@ -463,6 +463,14 @@ def process_event_batch(
             f"  Mô tả: {(pp.get('description') or (pp.get('ctx') or '')).strip()[:400]}"
             for pp in matched_products[:5]
         ) or "Chưa có thông tin sản phẩm cụ thể."
+        if group_intent == "greeting":
+            try:
+                import phrase_cache
+                avoid_ctx = phrase_cache.avoid_block("greeting")
+            except Exception:
+                avoid_ctx = ""
+            if avoid_ctx:
+                ctx_str = f"{ctx_str}\n\n{avoid_ctx}"
         user_prompt = (
             f"Ngữ cảnh sản phẩm trên live (context-live + context-data):\n{ctx_str}\n\n"
             f"Nhóm ý định: {group_intent}\n"

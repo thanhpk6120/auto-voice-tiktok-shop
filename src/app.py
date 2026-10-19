@@ -42,6 +42,12 @@ def process_event(event, queue, no_play: bool = False) -> bool:
     wav = synthesize(speak_text)
     kind = res.get("kind", "unknown")
     priority = res.get("priority", 3)
+    if str(kind).lower() == "greeting":
+        try:
+            import phrase_cache
+            phrase_cache.remember("greeting", speak_text)
+        except Exception:
+            pass
     queue.put(kind, priority, speak_text, wav)
     print(
         f"event={event.get('type', event.get('kind', ''))} -> speak_text='{speak_text}' "
@@ -198,6 +204,12 @@ def handle_run(args) -> int:
                     txt = it.get("text", "")
                     if not txt:
                         continue
+                    if str(it.get("type", "")).lower() == "greeting":
+                        try:
+                            import phrase_cache
+                            phrase_cache.remember("greeting", txt)
+                        except Exception:
+                            pass
                     wav = synthesize(txt)
                     prio = int(it.get("priority", 2))
                     k = str(it.get("type", "chat"))
@@ -258,7 +270,11 @@ def handle_run(args) -> int:
 
             # Chỉ đọc nhắc nhở khi hàng đợi rảnh (không chen ngang khách hỏi hàng/đơn hàng)
             if queue.qsize() <= 1 and not collector.has_high_priority():
-                spoken_text = phoneticize_vietnamese(r_txt)
+                try:
+                    import remind_text as _remind
+                    spoken_text = _remind.pick(r_txt) or phoneticize_vietnamese(r_txt)
+                except Exception:
+                    spoken_text = phoneticize_vietnamese(r_txt)
                 try:
                     wav = synthesize(spoken_text)
                     if wav:

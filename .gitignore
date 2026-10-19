@@ -19,6 +19,11 @@ gologin_zeroprofile.zip
 # Output files & audio
 out/
 
+# Context live runtime cache
+context-live/*.json
+context-live/*.md
+!context-live/README.md
+
 # PyInstaller build artifacts
 build/
 dist/

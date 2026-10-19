@@ -1719,6 +1719,104 @@ def _live_dir(live_dir: str | Path | None = None) -> Path:
     except Exception:
         return Path(__file__).resolve().parent.parent / target
 
+def get_product_context_path(product: dict, live_dir: str | Path | None = None) -> Path | None:
+    """Trả về Path nếu file context-live của sản phẩm đã tồn tại, ngược lại None."""
+    if not isinstance(product, dict):
+        return None
+    name = str(product.get("name") or "").strip()
+    pid = str(product.get("id") or "").strip()
+    if not name and not pid:
+        return None
+
+    target_dir = _live_dir(live_dir)
+    if not target_dir.is_dir():
+        return None
+
+    slug = _slugify_product(name, fallback=f"san-pham-{pid or 'live'}")
+    key = f"{pid}||{slug}" if pid else slug
+    index_path = target_dir / "_index.json"
+    if index_path.is_file():
+        try:
+            raw = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                fname = raw.get(key)
+                if fname and (target_dir / fname).is_file():
+                    return target_dir / fname
+        except Exception:
+            pass
+
+    # Kiểm tra trực tiếp file .md
+    cand = target_dir / f"{slug}.md"
+    if cand.is_file():
+        return cand
+    if pid:
+        cand_pid = target_dir / f"{slug}-{pid}.md"
+        if cand_pid.is_file():
+            return cand_pid
+    return None
+
+
+def has_product_context(product: dict, live_dir: str | Path | None = None) -> bool:
+    """Kiểm tra sản phẩm đã có file context-live hay chưa."""
+    return get_product_context_path(product, live_dir) is not None
+
+
+def read_product_context(product: dict, live_dir: str | Path | None = None) -> dict | None:
+    """Đọc thông tin giá và nội dung từ file context-live đã tồn tại của sản phẩm."""
+    path = get_product_context_path(product, live_dir)
+    if not path or not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+        out = {"path": str(path), "price": "", "real_price": "", "origin_price": "", "discount": ""}
+        for line in text.splitlines():
+            line = line.strip()
+            m = re.match(
+                r"^-?\s*giá\s*(?:khuyến mại(?:\s*thực tế(?:\s*trên live)?)?|ưu đãi|niêm yết(?:\s*giỏ hàng)?)?\s*:\s*(.+)$",
+                line,
+                re.I,
+            )
+            if m and not out["price"]:
+                val = m.group(1).strip()
+                out["price"] = val.split("(")[0].strip()
+                m_real = re.search(r"([\d.,]+\s*₫)", val)
+                if m_real:
+                    out["real_price"] = m_real.group(1)
+        return out
+    except Exception:
+        return None
+
+
+def save_live_products_cache(products: list[dict], live_dir: str | Path | None = None) -> Path | None:
+    """Lưu danh sách sản phẩm giỏ hàng live vào cache để lần sau mở app có sẵn."""
+    if not isinstance(products, list):
+        return None
+    target_dir = _live_dir(live_dir)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = target_dir / "_products_cache.json"
+        cache_path.write_text(json.dumps(products, ensure_ascii=False, indent=2), encoding="utf-8")
+        return cache_path
+    except Exception as e:
+        print(f"[browser] Lỗi lưu cache sản phẩm live: {e}")
+        return None
+
+
+def load_live_products_cache(live_dir: str | Path | None = None) -> list[dict]:
+    """Tải danh sách sản phẩm giỏ hàng live đã lưu từ phiên trước."""
+    target_dir = _live_dir(live_dir)
+    cache_path = target_dir / "_products_cache.json"
+    if not cache_path.is_file():
+        return []
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            return [p for p in raw if isinstance(p, dict) and (p.get("name") or p.get("id"))]
+    except Exception as e:
+        print(f"[browser] Lỗi đọc cache sản phẩm live: {e}")
+    return []
+
+
 
 def save_product_context(product: dict, live_dir: str | Path | None = None) -> Path | None:
     """Ghi context 1 sản phẩm vào context-live, đè file cũ nếu trùng cả tên và id.

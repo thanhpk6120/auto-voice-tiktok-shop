@@ -402,6 +402,8 @@ class App:
         self.proc: subprocess.Popen | None = None
         self._proc_start_time: float | None = None
         self.log_q: "queue.Queue[str]" = queue.Queue()
+        self._dialog_q: "queue.Queue[tuple[str, queue.Queue[str]]]" = queue.Queue()
+        self._ui_queue: queue.Queue = queue.Queue()
         self._raw_lines: list[str] = []
         self.status_counters = StatusCounters()
         self.devices = safe_devices()
@@ -483,6 +485,10 @@ class App:
         self._write(f"data  : {launcher.app_dir()} | meipass={getattr(sys, '_MEIPASS', '-')}")
         self._write(f"audio : {len(self.devices)} thiết bị ra")
         self.root.after(POLL_MS, self._poll_log)
+    def _post(self, fn) -> None:
+        """Day ham callback vao queue an toan tu bat ky thread nao de main thread thuc thi."""
+        self._ui_queue.put(fn)
+
 
     # ------------------------------ tab Trang thai ------------------------------
     def _build_status_tab(self, parent) -> None:
@@ -630,6 +636,20 @@ class App:
         tree_scroll.pack(side="right", fill="y")
         self._current_live_products: list[dict] = []
 
+        # Nạp sẵn danh sách sản phẩm đã lưu từ phiên trước (nếu có)
+        try:
+            import browser_manager
+            live_dir = self.cfg.get("context_live_dir")
+            cached = browser_manager.load_live_products_cache(live_dir=live_dir)
+            if cached:
+                self._current_live_products = cached
+                self._update_prod_tree(cached)
+                self.live_prod_status_var.set(
+                    f"Đã nạp {len(cached)} sản phẩm đã lưu từ phiên trước. Bấm 'Tải lại giỏ hàng live' để quét mới."
+                )
+        except Exception as e:
+            print(f"[gui] Lỗi nạp cache sản phẩm live: {e}")
+
     def _reload_live_products(self) -> None:
         def _fetch():
             self.live_prod_status_var.set("Đang quét sản phẩm từ trình duyệt...")
@@ -637,15 +657,20 @@ class App:
             # Bắt buộc lấy danh sách sản phẩm THẬT từ trình duyệt (không dùng context cục bộ).
             prods = browser_manager.fetch_live_products_cdp()
             if not prods:
-                self.root.after(0, lambda: self.live_prod_status_var.set(
+                self._post(lambda: self.live_prod_status_var.set(
                     "Không đọc được sản phẩm từ trình duyệt. Kiểm tra đã mở trang "
                     "shop.tiktok.com/streamer/live/product/dashboard và bật CDP chưa."
                 ))
                 self._current_live_products = []
 
             self._current_live_products = prods
-            self.root.after(0, lambda: self._update_prod_tree(prods))
-
+            if prods:
+                try:
+                    live_dir = self.cfg.get("context_live_dir")
+                    browser_manager.save_live_products_cache(prods, live_dir=live_dir)
+                except Exception as e:
+                    print(f"[gui] Lỗi lưu cache sản phẩm: {e}")
+            self._post(lambda: self._update_prod_tree(prods))
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _update_prod_tree(self, prods: list[dict]) -> None:
@@ -678,21 +703,45 @@ class App:
         def _run() -> None:
             import browser_manager
 
+            live_dir = self.cfg.get("context_live_dir")
             ok = 0
             skipped = 0
             failed: list[str] = []
             total = len(prods)
+            overwrite_mode: str | None = None  # None | "overwrite_all" | "skip_all"
+            def _ask_conflict(p_name: str) -> str:
+                resp_q: queue.Queue[str] = queue.Queue()
+                self._dialog_q.put((p_name, resp_q))
+                return resp_q.get()
+
             try:
                 for i, prod in enumerate(prods, 1):
                     name = str(prod.get("name") or f"Sản phẩm {i}")
                     url = str(prod.get("url") or "").strip()
-                    self.root.after(0, lambda i=i, total=total, name=name: self.live_prod_status_var.set(
+                    self._post(lambda i=i, total=total, name=name: self.live_prod_status_var.set(
                         f"Đang lấy context sản phẩm {i}/{total}: {name[:48]}..."
                     ))
                     if not url:
                         skipped += 1
                         failed.append(f"{name} (không có link sản phẩm)")
                         continue
+
+                    # Kiểm tra xem sản phẩm đã có context-live trước đó hay chưa
+                    if browser_manager.has_product_context(prod, live_dir=live_dir):
+                        choice = overwrite_mode
+                        if choice is None:
+                            choice = _ask_conflict(name)
+                            if choice in ("overwrite_all", "skip_all"):
+                                overwrite_mode = choice
+
+                        if choice in ("skip", "skip_all"):
+                            skipped += 1
+                            # Đọc thông tin đã lưu trước đó để cập nhật giá khuyến mại lên bảng
+                            existing = browser_manager.read_product_context(prod, live_dir=live_dir)
+                            if existing and existing.get("price"):
+                                prod["price"] = existing["price"]
+                                self._post(lambda p=list(prods): self._update_prod_tree(p))
+                            continue
                     detail = browser_manager.crawl_product_detail_cdp(url, max_reviews=10)
                     real_p = detail.get("real_price") or detail.get("price") or ""
                     list_p = str(prod.get("price") or "").strip()
@@ -711,19 +760,70 @@ class App:
                     if real_p:
                         merged["price"] = real_p
                         prod["price"] = real_p
-                    saved = browser_manager.save_product_context(merged)
+                    saved = browser_manager.save_product_context(merged, live_dir=live_dir)
                     if saved:
                         ok += 1
                         # Cập nhật ngay giá khuyến mại thực tế lên bảng giao diện
-                        self.root.after(0, lambda p=list(prods): self._update_prod_tree(p))
+                        self._post(lambda p=list(prods): self._update_prod_tree(p))
                     else:
                         failed.append(f"{name} (ghi file lỗi)")
             finally:
                 self._crawling = False
-                self.root.after(0, lambda: self.btn_load_ctx.state(["!disabled"]))
-                self.root.after(0, lambda: self._after_load_context_live(ok, skipped, failed, total))
+                # Lưu lại cache sản phẩm kèm giá đã cập nhật
+                if prods:
+                    try:
+                        browser_manager.save_live_products_cache(prods, live_dir=live_dir)
+                    except Exception:
+                        pass
+                self._post(lambda: self.btn_load_ctx.state(["!disabled"]))
+                self._post(lambda: self._after_load_context_live(ok, skipped, failed, total))
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _show_overwrite_dialog(self, prod_name: str) -> str:
+        """Hiển thị hộp thoại khi sản phẩm đã có context-live với 4 lựa chọn."""
+        ans = {"choice": "skip"}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Sản phẩm đã tồn tại context-live")
+        dialog.geometry("490x180")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() - 490) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 180) // 2
+            dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        lbl = ttk.Label(
+            dialog,
+            text=f"Sản phẩm sau đã có sẵn trong context-live:\n\n\"{prod_name[:60]}\"\n\nBạn muốn ghi đè để tải lại thông tin mới hay giữ nguyên (bỏ qua)?",
+            wraplength=450,
+            justify="left",
+        )
+        lbl.pack(padx=16, pady=16, fill="x")
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(padx=12, pady=6, fill="x")
+
+        def pick(c: str) -> None:
+            ans["choice"] = c
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: pick("skip"))
+
+        ttk.Button(btn_frame, text="Ghi đè", command=lambda: pick("overwrite"), width=11).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Bỏ qua", command=lambda: pick("skip"), width=11).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Ghi đè tất cả", command=lambda: pick("overwrite_all"), width=13).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Bỏ qua tất cả", command=lambda: pick("skip_all"), width=13).pack(side="left", padx=4)
+
+        dialog.wait_window()
+        return ans["choice"]
 
     def _after_load_context_live(self, ok: int, skipped: int, failed: list[str], total: int) -> None:
         self.live_prod_status_var.set(
@@ -731,7 +831,7 @@ class App:
         )
         msg = f"Đã lấy và lưu context cho {ok}/{total} sản phẩm vào thư mục context-live."
         if skipped:
-            msg += f"\nBỏ qua {skipped} sản phẩm không có link."
+            msg += f"\nBỏ qua {skipped} sản phẩm (đã có sẵn hoặc không có link)."
         if failed:
             preview = "\n".join(f"- {x}" for x in failed[:8])
             extra = f"\n... và {len(failed) - 8} mục khác" if len(failed) > 8 else ""
@@ -1099,6 +1199,27 @@ class App:
         if self.devices_dirty:
             self.devices_dirty = False
             self._fill_devices()
+        # Thuc thi cac UI callback tu background thread tren main thread
+        try:
+            while True:
+                fn = self._ui_queue.get_nowait()
+                try:
+                    fn()
+                except Exception as e:
+                    print(f"[gui] Lỗi UI callback: {e}")
+        except queue.Empty:
+            pass
+
+        # Xu ly cac yeu cau hien hop thoai lua chon tu background thread
+        try:
+            while True:
+                req = self._dialog_q.get_nowait()
+                p_name, resp_q = req
+                choice = self._show_overwrite_dialog(p_name)
+                resp_q.put(choice)
+        except queue.Empty:
+            pass
+
 
         if lines:
             flt = self.log_filter_var.get()

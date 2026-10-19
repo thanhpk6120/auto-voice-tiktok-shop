@@ -370,3 +370,135 @@ def test_save_product_context_notes_real_promotional_price():
         assert "giá gốc 43.166\u20ab" in content
         assert "giảm -87%" in content
         assert "Báo đúng giá khuyến mại thực tế chỉ 5.396\u20ab" in content
+
+
+def test_live_products_cache_save_and_load():
+    """Luu cache san pham vao _products_cache.json va tai lai du lieu dung nguyen ven."""
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prods = [
+            {"index": 1, "id": "111", "name": "Banh Gau", "price": "38.000\u20ab", "is_pinned": True},
+            {"index": 2, "id": "222", "name": "Bim Bim", "price": "5.396\u20ab", "is_pinned": False},
+        ]
+        assert bm.load_live_products_cache(live_dir=tmp_dir) == []
+
+        saved_path = bm.save_live_products_cache(prods, live_dir=tmp_dir)
+        assert saved_path is not None and saved_path.is_file()
+
+        loaded = bm.load_live_products_cache(live_dir=tmp_dir)
+        assert len(loaded) == 2
+        assert loaded[0]["name"] == "Banh Gau"
+        assert loaded[0]["is_pinned"] is True
+        assert loaded[1]["price"] == "5.396\u20ab"
+
+
+def test_has_and_read_product_context():
+    """Kiem tra san pham da co context-live va doc lai thong tin gia khuyen mai."""
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prod = {
+            "id": "1733809814429206033",
+            "name": "Bim Bim Ga Nuong",
+            "index": 1,
+            "price": "35.000\u20ab",
+            "real_price": "5.396\u20ab",
+            "origin_price": "43.166\u20ab",
+            "discount": "-87%",
+        }
+        assert bm.has_product_context(prod, live_dir=tmp_dir) is False
+        assert bm.read_product_context(prod, live_dir=tmp_dir) is None
+
+        bm.save_product_context(prod, live_dir=tmp_dir)
+        assert bm.has_product_context(prod, live_dir=tmp_dir) is True
+
+        ctx = bm.read_product_context(prod, live_dir=tmp_dir)
+        assert ctx is not None
+        assert "5.396\u20ab" in ctx["price"]
+        assert "5.396\u20ab" in ctx["real_price"]
+
+
+def test_gui_loads_cached_products_on_init(monkeypatch):
+    """Khi mo GUI, san pham live tu cache phien truoc phai duoc hien thi san len bang."""
+    import tkinter as tk
+    import gui
+
+    cached = [
+        {"index": 1, "id": "111", "name": "SP Cache 1", "price": "20.000\u20ab", "is_pinned": True},
+        {"index": 2, "id": "222", "name": "SP Cache 2", "price": "50.000\u20ab", "is_pinned": False},
+    ]
+    monkeypatch.setattr(bm, "load_live_products_cache", lambda live_dir=None: cached)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        app = gui.App(root, cfg={})
+        assert len(app._current_live_products) == 2
+        rows = app.prod_tree.get_children()
+        assert len(rows) == 2
+        val1 = app.prod_tree.item(rows[0])["values"]
+        assert val1[1] == "SP Cache 1"
+        assert val1[2] == "20.000\u20ab"
+        assert "Đang ghim" in str(val1[3])
+    finally:
+        root.destroy()
+
+
+def test_load_context_live_skips_existing_when_chosen(monkeypatch):
+    """Khi san pham da co context-live va chon skip, khong crawl lai va van cap nhat gia."""
+    import time
+    import tkinter as tk
+    import gui
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        # Tao san 1 san pham trong context-live
+        existing_prod = {
+            "id": "1733809814429206033",
+            "name": "Bim Bim",
+            "index": 1,
+            "price": "35.000\u20ab",
+            "real_price": "5.000\u20ab",
+        }
+        bm.save_product_context(existing_prod, live_dir=tmp_dir)
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            from tkinter import messagebox
+            monkeypatch.setattr(messagebox, "showinfo", lambda *a, **k: None)
+            monkeypatch.setattr(messagebox, "showwarning", lambda *a, **k: None)
+            app = gui.App(root, cfg={"context_live_dir": str(tmp_dir)})
+            u1 = "https://shop.tiktok.com/view/product/1733809814429206033"
+            u2 = "https://shop.tiktok.com/view/product/1735159097906791637"
+            app._current_live_products = [
+                {"index": 1, "id": "1733809814429206033", "name": "Bim Bim", "price": "35.000\u20ab", "url": u1},
+                {"index": 2, "id": "1735159097906791637", "name": "San Pham Moi", "price": "10.000\u20ab", "url": u2},
+            ]
+
+            crawled_urls = []
+            monkeypatch.setattr(bm, "crawl_product_detail_cdp", lambda u, max_reviews=10: crawled_urls.append(u) or {
+                "id": "1735159097906791637", "name": "San Pham Moi", "real_price": "8.000\u20ab", "url": u
+            })
+            # Gia lap nguoi dung bam "Bỏ qua tất cả"
+            monkeypatch.setattr(app, "_show_overwrite_dialog", lambda name: "skip_all")
+
+            # Chay worker
+            app._load_context_live()
+            # Doi worker chay xong
+            time_start = time.time()
+            while app._crawling and time.time() - time_start < 5:
+                app._poll_log()
+                root.update()
+                time.sleep(0.02)
+            root.update()
+
+            # San pham 1 da bi bo qua nen khong crawl
+            assert u1 not in crawled_urls
+            # San pham 2 la moi nen van duoc crawl
+            assert u2 in crawled_urls
+            # San pham 1 doc lai gia cu da luu la 5.000d
+            assert app._current_live_products[0]["price"] == "5.000\u20ab"
+            # San pham 2 cap nhat gia moi la 8.000d
+            assert app._current_live_products[1]["price"] == "8.000\u20ab"
+        finally:
+            root.destroy()

@@ -408,6 +408,7 @@ Trả về dict:
 | `url` | `https://shop.tiktok.com/view/product/<id>` |
 
 **Không gọi AI** ở bước này, và **không reload** tab dashboard — bấm nút giữa live vẫn an toàn.
+Danh sách sản phẩm được tự động lưu vào cache (`_products_cache.json` trong thư mục `context-live`). Lần sau mở app, toàn bộ sản phẩm và giá bán sẽ được nạp sẵn ngay lập tức mà không cần quét lại.
 
 ### 13.2 Nút **📥 Load context-live** — Lấy giá khuyến mại thực tế & mô tả
 
@@ -423,7 +424,13 @@ Thay cho nút *Lưu vào context-live* cũ. Với từng sản phẩm trong bả
 4. Ghi ra `context-live/` với tên file suy ra **từ tên sản phẩm** (slug bỏ dấu), ghi rõ giá khuyến mại
    và hướng dẫn AI tư vấn chuẩn giá sale cho khách.
 
-**Chống trùng:** file chỉ mục `context-live/_index.json` giữ khoá `<id>||<slug>`, giá trị là tên file.
+**Xử lý trùng khi nạp context-live:** Nếu sản phẩm đã có sẵn file context trong thư mục, hệ thống sẽ hiện hộp thoại hỏi lựa chọn:
+- **Ghi đè:** Tải lại thông tin chi tiết và ghi đè sản phẩm hiện tại.
+- **Bỏ qua:** Giữ nguyên file cũ, đọc lại giá đã lưu để hiển thị lên bảng, không tốn thời gian tải lại.
+- **Ghi đè tất cả:** Áp dụng ghi đè cho toàn bộ các sản phẩm đã có mà không hỏi lại.
+- **Bỏ qua tất cả:** Áp dụng bỏ qua cho toàn bộ các sản phẩm đã có mà không hỏi lại (chỉ tải các sản phẩm mới).
+
+**Chống trùng file:** file chỉ mục `context-live/_index.json` giữ khoá `<id>||<slug>`, giá trị là tên file.
 
 | Trường hợp | Kết quả |
 |---|---|
@@ -432,7 +439,7 @@ Thay cho nút *Lưu vào context-live* cũ. Với từng sản phẩm trong bả
 | Khác tên | Tạo file mới |
 
 Tên file suy ra **từ tên sản phẩm** (`kem-duong-da-cap-am-water-gel.md`), không dùng tiền tố thứ tự giỏ hàng.
-`context-live/README.md` được bỏ qua khi nạp ngữ cảnh, không bị coi là sản phẩm.
+`context-live/README.md` và `_products_cache.json` được bỏ qua khi nạp ngữ cảnh, không bị coi là sản phẩm.
 
 ### 13.3 Phân loại ý định bằng model AI cấu hình được (`analyst_llm_model`)
 

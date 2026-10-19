@@ -406,6 +406,17 @@ Trả về dict:
 | `price` | `format_available_price` (giá niêm yết giỏ hàng ban đầu) |
 | `is_pinned` | chuẩn xác từ `introduce_id` của API (chỉ tối đa 1 sản phẩm ghim trên live, không nhầm với nhãn "Lựa chọn yêu thích") |
 | `url` | `https://shop.tiktok.com/view/product/<id>` |
+| `has_context` | `true` nếu sản phẩm đã có file context-live (do lần *Load context-live* trước sinh ra) |
+| `real_price` | giá khuyến mại đã lưu trong context-live (nếu có) — **được ưu tiên đè lên `price`** |
+
+**Ưu tiên giá:** giá niêm yết lấy từ giỏ hàng chỉ là giá tạm. Khi cache giỏ hàng được nạp
+(mở app) hoặc sau mỗi lần **🔄 Tải lại giỏ hàng live**, app gọi `merge_context_prices()` để
+**nạp lại giá khuyến mại đã lưu** trong `context-live/*.md` cho các sản phẩm đã có context.
+Nhờ vậy bảng luôn hiển thị đúng giá sale của lần *Load context-live* trước, không bị giá
+niêm yết của giỏ hàng đè mất. Cột **Context-live** trong bảng hiển thị `✅ Đã có` / `— Chưa có`.
+
+Nếu **🔄 Tải lại giỏ hàng live** không đọc được sản phẩm (trình duyệt chưa mở dashboard, CDP
+chưa bật), bảng **giữ nguyên** danh sách đã nạp thay vì bị xoá trắng.
 
 **Không gọi AI** ở bước này, và **không reload** tab dashboard — bấm nút giữa live vẫn an toàn.
 Danh sách sản phẩm được tự động lưu vào cache (`_products_cache.json` trong thư mục `context-live`). Lần sau mở app, toàn bộ sản phẩm và giá bán sẽ được nạp sẵn ngay lập tức mà không cần quét lại.

@@ -1798,6 +1798,32 @@ def read_product_context(product: dict, live_dir: str | Path | None = None) -> d
         return None
 
 
+def merge_context_prices(products: list[dict], live_dir: str | Path | None = None) -> list[dict]:
+    """Nạp lại giá khuyến mại đã lưu trong context-live cho từng sản phẩm.
+
+    Dùng khi nạp cache giỏ hàng lúc mở app và sau 'Tải lại giỏ hàng live', để bảng hiển thị
+    đúng giá sale của lần Load context-live trước thay vì bị giá niêm yết của giỏ hàng đè lên.
+    Đánh dấu `has_context=True` cho sản phẩm đã có file context-live.
+    """
+    out: list[dict] = []
+    for p in products or []:
+        if not isinstance(p, dict):
+            continue
+        q = dict(p)
+        info = read_product_context(q, live_dir=live_dir)
+        if info:
+            q["has_context"] = True
+            price = str(info.get("real_price") or info.get("price") or "").strip()
+            if price:
+                q["price"] = price
+            if info.get("real_price"):
+                q["real_price"] = info["real_price"]
+        else:
+            q["has_context"] = False
+        out.append(q)
+    return out
+
+
 def save_live_products_cache(products: list[dict], live_dir: str | Path | None = None) -> Path | None:
     """Lưu danh sách sản phẩm giỏ hàng live vào cache để lần sau mở app có sẵn."""
     if not isinstance(products, list):

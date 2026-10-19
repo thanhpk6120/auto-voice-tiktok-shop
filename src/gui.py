@@ -622,17 +622,19 @@ class App:
         table_frame = ttk.Frame(pad)
         table_frame.pack(fill="both", expand=True)
 
-        cols = ("stt", "name", "price", "pinned")
+        cols = ("stt", "name", "price", "ctx", "pinned")
         self.prod_tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=12)
         self.prod_tree.heading("stt", text="#STT")
         self.prod_tree.heading("name", text="Tên sản phẩm")
         self.prod_tree.heading("price", text="Giá bán")
+        self.prod_tree.heading("ctx", text="Context-live")
         self.prod_tree.heading("pinned", text="Trạng thái ghim")
 
-        self.prod_tree.column("stt", width=60, anchor="center")
-        self.prod_tree.column("name", width=380, anchor="w")
-        self.prod_tree.column("price", width=130, anchor="center")
-        self.prod_tree.column("pinned", width=130, anchor="center")
+        self.prod_tree.column("stt", width=55, anchor="center")
+        self.prod_tree.column("name", width=360, anchor="w")
+        self.prod_tree.column("price", width=120, anchor="center")
+        self.prod_tree.column("ctx", width=110, anchor="center")
+        self.prod_tree.column("pinned", width=120, anchor="center")
 
         tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.prod_tree.yview)
         self.prod_tree.configure(yscrollcommand=tree_scroll.set)
@@ -647,34 +649,44 @@ class App:
             live_dir = self.cfg.get("context_live_dir")
             cached = browser_manager.load_live_products_cache(live_dir=live_dir)
             if cached:
+                cached = browser_manager.merge_context_prices(cached, live_dir=live_dir)
                 self._current_live_products = cached
                 self._update_prod_tree(cached)
+                n_ctx = sum(1 for p in cached if p.get("has_context"))
                 self.live_prod_status_var.set(
-                    f"Đã nạp {len(cached)} sản phẩm đã lưu từ phiên trước. Bấm 'Tải lại giỏ hàng live' để quét mới."
+                    f"Đã nạp {len(cached)} sản phẩm từ phiên trước, trong đó {n_ctx} sản phẩm đã có context-live "
+                    "(giá khuyến mại hiển thị đúng như lần Load trước). Bấm 'Tải lại giỏ hàng live' để quét mới."
                 )
         except Exception as e:
             print(f"[gui] Lỗi nạp cache sản phẩm live: {e}")
 
     def _reload_live_products(self) -> None:
         def _fetch():
-            self.live_prod_status_var.set("Đang quét sản phẩm từ trình duyệt...")
+            self._post(lambda: self.live_prod_status_var.set("Đang quét sản phẩm từ trình duyệt..."))
             import browser_manager
             # Bắt buộc lấy danh sách sản phẩm THẬT từ trình duyệt (không dùng context cục bộ).
-            prods = browser_manager.fetch_live_products_cdp()
+            try:
+                prods = browser_manager.fetch_live_products_cdp()
+            except Exception as e:
+                self._post(lambda: self.live_prod_status_var.set(f"Lỗi đọc sản phẩm từ trình duyệt: {e}"))
+                return
             if not prods:
+                # Quét lỗi KHÔNG được xoá bảng: giữ nguyên danh sách đã nạp từ phiên trước.
                 self._post(lambda: self.live_prod_status_var.set(
                     "Không đọc được sản phẩm từ trình duyệt. Kiểm tra đã mở trang "
-                    "shop.tiktok.com/streamer/live/product/dashboard và bật CDP chưa."
+                    "shop.tiktok.com/streamer/live/product/dashboard và bật CDP chưa. "
+                    "Bảng vẫn giữ danh sách cũ."
                 ))
-                self._current_live_products = []
+                return
 
+            live_dir = self.cfg.get("context_live_dir")
+            # Giá khuyến mại đã lưu trong context-live phải thắng giá niêm yết của giỏ hàng.
+            prods = browser_manager.merge_context_prices(prods, live_dir=live_dir)
             self._current_live_products = prods
-            if prods:
-                try:
-                    live_dir = self.cfg.get("context_live_dir")
-                    browser_manager.save_live_products_cache(prods, live_dir=live_dir)
-                except Exception as e:
-                    print(f"[gui] Lỗi lưu cache sản phẩm: {e}")
+            try:
+                browser_manager.save_live_products_cache(prods, live_dir=live_dir)
+            except Exception as e:
+                print(f"[gui] Lỗi lưu cache sản phẩm: {e}")
             self._post(lambda: self._update_prod_tree(prods))
         threading.Thread(target=_fetch, daemon=True).start()
 
@@ -685,9 +697,13 @@ class App:
             stt = f"#{p.get('index', '-')}"
             name = p.get("name", "")
             price = p.get("price", "")
+            ctx = "✅ Đã có" if p.get("has_context") else "— Chưa có"
             pinned = "⭐ Đang ghim" if p.get("is_pinned") else "Trong giỏ"
-            self.prod_tree.insert("", "end", values=(stt, name, price, pinned))
-        self.live_prod_status_var.set(f"Đã cập nhật {len(prods)} sản phẩm trong giỏ hàng.")
+            self.prod_tree.insert("", "end", values=(stt, name, price, ctx, pinned))
+        n_ctx = sum(1 for p in prods if p.get("has_context"))
+        self.live_prod_status_var.set(
+            f"Đã cập nhật {len(prods)} sản phẩm trong giỏ hàng ({n_ctx} đã có context-live)."
+        )
 
     def _load_context_live(self) -> None:
         """Mở từng link sản phẩm, lấy tên + mô tả + 10 đánh giá đầu tiên, lưu vào context-live."""
@@ -741,11 +757,14 @@ class App:
 
                         if choice in ("skip", "skip_all"):
                             skipped += 1
+                            prod["has_context"] = True
                             # Đọc thông tin đã lưu trước đó để cập nhật giá khuyến mại lên bảng
                             existing = browser_manager.read_product_context(prod, live_dir=live_dir)
-                            if existing and existing.get("price"):
-                                prod["price"] = existing["price"]
-                                self._post(lambda p=list(prods): self._update_prod_tree(p))
+                            if existing:
+                                sale = str(existing.get("real_price") or existing.get("price") or "").strip()
+                                if sale:
+                                    prod["price"] = sale
+                            self._post(lambda p=list(prods): self._update_prod_tree(p))
                             continue
                     detail = browser_manager.crawl_product_detail_cdp(url, max_reviews=10)
                     real_p = detail.get("real_price") or detail.get("price") or ""
@@ -768,19 +787,21 @@ class App:
                     saved = browser_manager.save_product_context(merged, live_dir=live_dir)
                     if saved:
                         ok += 1
+                        prod["has_context"] = True
                         # Cập nhật ngay giá khuyến mại thực tế lên bảng giao diện
                         self._post(lambda p=list(prods): self._update_prod_tree(p))
                     else:
                         failed.append(f"{name} (ghi file lỗi)")
             finally:
                 self._crawling = False
-                # Lưu lại cache sản phẩm kèm giá đã cập nhật
+                # Lưu lại cache sản phẩm kèm giá đã cập nhật (giữ cờ has_context)
                 if prods:
                     try:
                         browser_manager.save_live_products_cache(prods, live_dir=live_dir)
                     except Exception:
                         pass
                 self._post(lambda: self.btn_load_ctx.state(["!disabled"]))
+                self._post(lambda: self._update_prod_tree(list(prods)))
                 self._post(lambda: self._after_load_context_live(ok, skipped, failed, total))
 
         threading.Thread(target=_run, daemon=True).start()

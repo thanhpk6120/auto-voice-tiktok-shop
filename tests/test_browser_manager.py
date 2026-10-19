@@ -438,9 +438,94 @@ def test_gui_loads_cached_products_on_init(monkeypatch):
         val1 = app.prod_tree.item(rows[0])["values"]
         assert val1[1] == "SP Cache 1"
         assert val1[2] == "20.000\u20ab"
-        assert "Đang ghim" in str(val1[3])
+        assert val1[3] == "— Chưa có"   # cột Context-live
+        assert "Đang ghim" in str(val1[4])
     finally:
         root.destroy()
+
+def test_gui_restores_saved_context_prices_on_init(monkeypatch):
+    """Mo lai app: gia khuyen mai da luu trong context-live phai thang gia niem yet cua cache."""
+    import tkinter as tk
+    import gui
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prod = {"id": "777", "name": "Ao Thun Nam", "url": "u", "price": "35.000\u20ab"}
+        bm.save_product_context({**prod, "real_price": "5.000\u20ab", "list_price": "35.000\u20ab"}, live_dir=tmp_dir)
+
+        cached = [
+            {"index": 1, "id": "777", "name": "Ao Thun Nam", "url": "u",
+             "price": "35.000\u20ab", "is_pinned": False},
+            {"index": 2, "id": "888", "name": "San Pham Moi", "url": "u2",
+             "price": "10.000\u20ab", "is_pinned": False},
+        ]
+        monkeypatch.setattr(bm, "load_live_products_cache", lambda live_dir=None: cached)
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            app = gui.App(root, cfg={"context_live_dir": str(tmp_dir)})
+            rows = app.prod_tree.get_children()
+            assert len(rows) == 2
+            v1 = app.prod_tree.item(rows[0])["values"]
+            v2 = app.prod_tree.item(rows[1])["values"]
+            assert v1[2] == "5.000\u20ab", v1        # gia sale cua lan Load truoc
+            assert v1[3] == "\u2705 Đã có"
+            assert v2[2] == "10.000\u20ab"           # chua co context -> giu gia gio hang
+            assert v2[3] == "— Chưa có"
+            assert app._current_live_products[0]["has_context"] is True
+        finally:
+            root.destroy()
+
+
+def test_reload_keeps_context_prices_and_survives_fetch_failure(monkeypatch):
+    """'Tai lai gio hang live' khong duoc de gia niem yet de mat gia sale, va fetch loi giu nguyen bang."""
+    import time
+    import tkinter as tk
+    import gui
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prod = {"id": "777", "name": "Ao Thun Nam", "url": "u", "price": "35.000\u20ab"}
+        bm.save_product_context({**prod, "real_price": "5.000\u20ab", "list_price": "35.000\u20ab"}, live_dir=tmp_dir)
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            app = gui.App(root, cfg={"context_live_dir": str(tmp_dir)})
+
+            # Gio hang that tra ve gia niem yet 35.000d cho cung san pham
+            monkeypatch.setattr(
+                bm, "fetch_live_products_cdp",
+                lambda cdp_port=30899: [{"index": 1, "id": "777", "name": "Ao Thun Nam",
+                                         "url": "u", "price": "35.000\u20ab"}],
+            )
+            app._reload_live_products()
+            deadline = time.time() + 5
+            # Cho ca worker va callback UI (hang doi _ui_queue) chay xong
+            while time.time() < deadline and not app.prod_tree.get_children():
+                app._poll_log()
+                root.update()
+                time.sleep(0.02)
+            root.update()
+
+            assert app._current_live_products[0]["price"] == "5.000\u20ab"
+            assert app.prod_tree.item(app.prod_tree.get_children()[0])["values"][2] == "5.000\u20ab"
+
+            # fetch loi -> bang phai giu nguyen, khong bi xoa
+            before = [app.prod_tree.item(r)["values"] for r in app.prod_tree.get_children()]
+            monkeypatch.setattr(bm, "fetch_live_products_cdp", lambda cdp_port=30899: [])
+            app._reload_live_products()
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                app._poll_log()
+                root.update()
+                time.sleep(0.02)
+            root.update()
+            after = [app.prod_tree.item(r)["values"] for r in app.prod_tree.get_children()]
+            assert after == before
+        finally:
+            root.destroy()
 
 
 def test_load_context_live_skips_existing_when_chosen(monkeypatch):

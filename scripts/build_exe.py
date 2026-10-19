@@ -47,7 +47,7 @@ def _rmtree(path: Path) -> None:
 def copy_runtime_files(dist: Path) -> list[str]:
     """Copy data nguoi dung co the sua + config mau ra canh .exe."""
     copied: list[str] = []
-    for name in ("context-data", "context-live", "prompts", "ui"):
+    for name in ("context-data", "prompts", "ui"):
         src = ROOT / name
         if not src.is_dir():
             continue
@@ -56,7 +56,14 @@ def copy_runtime_files(dist: Path) -> list[str]:
             shutil.rmtree(dst, ignore_errors=True)
         shutil.copytree(src, dst)
         copied.append(name)
-    (dist / "context-live").mkdir(parents=True, exist_ok=True)
+
+    # Riêng context-live: giữ lại file context .md và cache của người dùng trong dist,
+    # không rmtree làm mất dữ liệu đã crawl.
+    src_live = ROOT / "context-live"
+    dst_live = dist / "context-live"
+    if src_live.is_dir():
+        shutil.copytree(src_live, dst_live, dirs_exist_ok=True)
+    dst_live.mkdir(parents=True, exist_ok=True)
     copied.append("context-live/")
     for name in ("requirements.txt", ".env.example"):
         src = ROOT / name

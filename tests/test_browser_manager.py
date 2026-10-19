@@ -229,3 +229,41 @@ def test_launch_gologin_profile_applies_profile_json():
             assert any("--lang=vi-VN" in arg for arg in call_cmd)
             assert any("--proxy-server=http://127.0.0.1:8888" in arg for arg in call_cmd)
             assert any("tiktok.com" in arg for arg in call_cmd)
+
+
+def test_fetch_live_products_dom(monkeypatch):
+    """fetch_live_products_cdp contrat DOM va hoá chuẩn dict đầu ra."""
+    dom_payload = [
+        {"index": 1, "id": "", "name": "SP A", "price": "35.000₫",
+         "is_pinned": True, "url": "", "raw": {"stock": "Còn: 4,7K", "dom": True}},
+        {"index": 2, "id": "", "name": "SP B", "price": "10.000₫",
+         "is_pinned": False, "url": "", "raw": {}},
+        "rác",  # phải bị bỏ qua
+        {"name": ""},  # không tên -> bỏ
+        {"index": 9, "name": "SP C", "price": 123},  # price số -> chuỗi
+    ]
+
+    class FakeWS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (FakeWS(), None))
+    monkeypatch.setattr(bm, "_cdp_eval", lambda ws, script, req_id=0, timeout_s=20.0: dom_payload)
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 3
+    assert [p["name"] for p in prods] == ["SP A", "SP B", "SP C"]
+    assert prods[0]["is_pinned"] is True
+    assert prods[0]["raw"]["stock"] == "Còn: 4,7K"
+    assert prods[2]["index"] == 9
+    assert prods[2]["price"] == "123"
+    assert isinstance(prods[0]["raw"], dict)
+
+
+def test_fetch_live_products_no_browser(monkeypatch):
+    monkeypatch.setattr(bm, "_connect_cdp", lambda cdp_port=30899: (None, "không có browser"))
+    assert bm.fetch_live_products_cdp() == []
+
+

@@ -1147,279 +1147,6 @@ def stream_cdp_events(
 # Lấy danh sách sản phẩm trong giỏ hàng live (logic DOM thuần, KHÔNG dùng AI)
 # -----------------------------------------------------------------------------
 
-# Script JS quét bảng sản phẩm. Thử nhiều nhóm selector theo thứ tự ưu tiên để
-# chịu được các phiên bản DOM khác nhau của TikTok Shop.
-_CDP_PRODUCTS_JS = r"""
-(() => {
-    const out = [];
-    const seen = new Set();
-
-    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-
-    // Uu tien nhom selector chat nhat -> long nhat
-    const GROUPS = [
-        ['.arco-table-tr', 'tr[data-row-key]', '[data-e2e*="product-row"]'],
-        ['tr', '[class*="ProductItem"]', '[class*="product-item"]'],
-        ['li[class*="product"]', '[class*="productCard"]', '[class*="card"]']
-    ];
-
-    const idFromAttrs = (el) => {
-        const attrs = [
-            'data-product-id', 'data-id', 'data-productid', 'product-id', 'data-row-key'
-        ];
-        for (const a of attrs) {
-            const v = el.getAttribute && el.getAttribute(a);
-            if (v && /^\d{6,}$/.test(String(v).trim())) return String(v).trim();
-        }
-        for (const a of ['data-e2e', 'data-testid', 'id', 'class']) {
-            const v = (el.getAttribute && el.getAttribute(a)) || '';
-            const m = String(v).match(/(?:product[_-]?id[_-]?)?(\d{10,20})/i);
-            if (m) return m[1];
-        }
-        return '';
-    };
-
-    const idFromLink = (el) => {
-        const a = el.querySelector && el.querySelector('a[href]');
-        if (!a) return { id: '', url: '' };
-        let href = a.getAttribute('href') || '';
-        if (!href) return { id: '', url: '' };
-        let abs = href;
-        try { abs = new URL(href, location.origin).href; } catch (e) { abs = href; }
-        let id = '';
-        const m = abs.match(/[?&](?:product_id|productId|id)=(\d{6,})/);
-        if (m) id = m[1];
-        if (!id) {
-            const m2 = abs.match(/\/(?:product|p)\/(\d{6,})/);
-            if (m2) id = m2[1];
-        }
-        return { id: id, url: abs };
-    };
-
-    const pickName = (row, text) => {
-        const sels = [
-            '[class*="title"]', '[class*="name"]', '[data-e2e*="title"]',
-            '[class*="ProductTitle"]', 'h3', 'h4', 'a[href]'
-        ];
-        for (const s of sels) {
-            const el = row.querySelector(s);
-            const v = norm(el && (el.innerText || el.textContent));
-            if (v && v.length >= 6 && !/^\d+$/.test(v)) return v;
-        }
-        const lines = text.split('\n').map(norm).filter(
-            (l) => l.length >= 6 && !/[₫$]/.test(l) && !/^\d[\d.,]*\s*(đ|k|vnd)?$/i.test(l)
-        );
-        return lines.length ? lines[0] : '';
-    };
-
-    const pickPrice = (row, text) => {
-        const el = row.querySelector('[class*="price"], [data-e2e*="price"]');
-        const v = norm(el && (el.innerText || el.textContent));
-        if (v && /\d/.test(v)) return v;
-        const m = text.match(/(\d[\d.,]*\s*(?:₫|đ|VND|k))/i);
-        return m ? m[1] : 'Ưu đãi trên live';
-    };
-
-    const pickPinned = (row, text) => {
-        if (/đang ghim|đang giới thiệu|đang phát/i.test(text)) return true;
-        const el = row.querySelector('[class*="pin"], [class*="Pinned"], [data-e2e*="pin"]');
-        if (el && /ghim|pin|giới thiệu/i.test(norm(el.innerText || el.textContent))) return true;
-        return false;
-    };
-
-    for (const group of GROUPS) {
-        let rows = [];
-        for (const s of group) {
-            try { rows = rows.concat(Array.from(document.querySelectorAll(s))); } catch (e) {}
-        }
-        if (!rows.length) continue;
-
-        for (const row of rows) {
-            if (row.querySelector && row.querySelector('th')) continue;
-            const cls = typeof row.className === 'string' ? row.className : '';
-            if (/header|thead/i.test(cls)) continue;
-
-            const text = norm(row.innerText || row.textContent);
-            if (!text || text.length < 4) continue;
-
-            const fromLink = idFromLink(row);
-            let pid = idFromAttrs(row) || fromLink.id;
-            if (!pid) {
-                // Fallback: tim day so dai trong text cua row (TikTok hien id san pham dang so dai)
-                const idInText = text.match(/\b(\d{10,20})\b/);
-                if (idInText) pid = idInText[1];
-            }
-            const name = pickName(row, row.innerText || '');
-            if (!name || name.length < 4) continue;
-
-            const key = pid || name;
-            if (seen.has(key)) continue;
-            seen.add(key);
-
-            const sttMatch = text.match(/(?:^|\s)#?(\d{1,2})(?:\s|[.:]|$)/);
-            // Neu khong co the <a href> nhung co id -> tao link san pham fallback
-            let link = fromLink.url || '';
-            if (!link && pid) link = 'https://shop.tiktok.com/view/product/' + pid;
-
-            out.push({
-                index: sttMatch ? parseInt(sttMatch[1], 10) : out.length + 1,
-                id: pid || '',
-                name: name,
-                price: pickPrice(row, text),
-                is_pinned: pickPinned(row, text),
-                url: link,
-                raw: text
-            });
-        }
-        if (out.length) break;   // nhom selector dau tien co ket qua -> dung
-    }
-
-    out.forEach((p, i) => { p.index = i + 1; });
-    return JSON.stringify(out);
-})()
-"""
-
-
-def _cdp_eval(ws, expr: str, req_id: int = 1, timeout_s: float = 20.0):
-    """Gửi Runtime.evaluate và trả về giá trị đã parse JSON (nếu là chuỗi JSON)."""
-    ws.send(json.dumps({
-        "id": req_id,
-        "method": "Runtime.evaluate",
-        "params": {"expression": expr, "returnByValue": True, "awaitPromise": True},
-    }))
-    deadline = time.monotonic() + max(1.0, timeout_s)
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        try:
-            resp = json.loads(ws.recv(timeout=remaining))
-        except Exception:
-            return None
-        if resp.get("id") != req_id:
-            continue
-        res = resp.get("result", {})
-        if res.get("exceptionDetails"):
-            return None
-        val = res.get("result", {}).get("value")
-        if isinstance(val, str):
-            try:
-                return json.loads(val)
-            except Exception:
-                return val
-        return val
-
-
-def _connect_cdp(cdp_port: int = 30899, timeout_s: float = 5.0):
-    """Mở kết nối websocket tới tab TikTok Shop. Trả (ws, None) hoặc (None, lý do)."""
-    try:
-        from websockets.sync.client import connect
-    except ImportError:
-        return None, "Thiếu thư viện websockets"
-    target = get_cdp_target(cdp_port=cdp_port)
-    if not target or not target.get("webSocketDebuggerUrl"):
-        return None, f"Không tìm thấy tab TikTok Shop trên cổng CDP {cdp_port}"
-    return connect(target["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2), None
-
-
-def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
-    """Đọc danh sách sản phẩm trong giỏ hàng live trực tiếp từ DOM qua CDP.
-
-    Trả về list các dict: index, id, name, price, is_pinned, url, raw.
-    Không dùng AI - chỉ đọc DOM. Lỗi/không có browser -> trả [].
-    """
-    ws, err = _connect_cdp(cdp_port=cdp_port)
-    if ws is None:
-        if err:
-            print(f"[browser] {err}")
-        return []
-    try:
-        with ws:
-            data = _cdp_eval(ws, _CDP_PRODUCTS_JS, req_id=9001, timeout_s=20.0)
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"[browser] Lỗi fetch_live_products_cdp: {e}")
-        return []
-
-
-# Script JS lấy chi tiết 1 trang sản phẩm: tên, mô tả, comment/đánh giá đầu tiên.
-_CDP_PRODUCT_DETAIL_JS = r"""
-(() => {
-    const out = { id: '', name: '', url: location.href, description: '', reviews: [] };
-    const norm = (s) => (s || '').replace(/\r/g, '').replace(/[ \t\u00a0]+/g, ' ').trim();
-    const oneLine = (s) => norm(s).replace(/\n+/g, ' ').trim();
-
-    out.url = location.href;
-    const pm = location.href.match(/[?&](?:product_id|productId|id)=(\d{6,})/) ||
-               location.href.match(/\/(?:product|p)\/(\d{6,})/);
-    if (pm) out.id = pm[1];
-
-    // Ten san pham
-    const nameSels = ['h1', '[class*="ProductTitle"]', '[class*="product-title"]',
-                      '[class*="title"]', 'h2'];
-    for (const s of nameSels) {
-        const el = document.querySelector(s);
-        const v = oneLine(el && (el.innerText || el.textContent));
-        if (v && v.length >= 6 && v.length <= 400) { out.name = v; break; }
-    }
-    if (!/^\d{6,}$/.test(out.id)) {
-        const el = document.querySelector('[data-product-id], [data-id]');
-        const v = el && (el.getAttribute('data-product-id') || el.getAttribute('data-id'));
-        if (v && /^\d{6,}$/.test(String(v))) out.id = String(v);
-    }
-
-    // Mo ta san pham
-    const descSels = ['[class*="ProductDescription"]', '[class*="product-description"]',
-                      '[class*="Description"]', '[class*="description"]',
-                      '[class*="detail"]', '[data-e2e*="description"]'];
-    let desc = '';
-    for (const s of descSels) {
-        for (const el of Array.from(document.querySelectorAll(s)).slice(0, 4)) {
-            const v = (el.innerText || el.textContent || '').trim();
-            if (v && v.length > desc.length) desc = v;
-        }
-        if (desc.length > 80) break;
-    }
-    if (!desc) {
-        // Fallback: ghep cac doan van ban dai trong body
-        const ps = Array.from(document.querySelectorAll('p, li'))
-            .map((p) => (p.innerText || '').trim())
-            .filter((t) => t.length >= 30);
-        desc = ps.slice(0, 12).join('\n');
-    }
-    out.description = norm(desc).slice(0, 4000);
-
-    // Comment / danh gia dau tien
-    const revSels = ['[class*="review-item"]', '[class*="ReviewItem"]', '[class*="review"]',
-                     '[class*="comment-item"]', '[class*="CommentItem"]', '[class*="comment"]',
-                     '[class*="rating"]', '[data-e2e*="review"]', '[data-e2e*="comment"]'];
-    const seenR = new Set();
-    const reviews = [];
-    for (const s of revSels) {
-        let els = [];
-        try { els = Array.from(document.querySelectorAll(s)); } catch (e) {}
-        for (const el of els) {
-            // Bo container lon: chi lay node la (khong chua node cung selector khac)
-            if (el.querySelector && el.querySelector(revSels.join(','))) continue;
-            let t = oneLine(el.innerText || el.textContent);
-            if (!t || t.length < 4 || t.length > 600) continue;
-            if (/^(đánh giá|review|bình luận|comment|xem thêm|viết đánh giá)$/i.test(t)) continue;
-            t = t.replace(/^\d+(\.\d+)?\s*★?\s*/, '').trim();
-            if (t.length < 4) continue;
-            const key = t.toLowerCase();
-            if (seenR.has(key)) continue;
-            seenR.add(key);
-            reviews.push(t);
-            if (reviews.length >= 60) break;
-        }
-        if (reviews.length) break;
-    }
-    out.reviews = reviews;
-    return JSON.stringify(out);
-})()
-"""
-
-
 def _slugify_product(name: str, fallback: str = "san-pham") -> str:
     """Đổi tên sản phẩm thành slug tên file (bỏ dấu, chỉ giữ chữ/số/gạch)."""
     import unicodedata
@@ -1476,20 +1203,257 @@ def _cdp_ws_for_target(target_id: str, cdp_port: int = 30899, timeout_s: float =
     return None
 
 
+# Script chạy TRONG TAB DASHBOARD: nhúng PDP vào iframe ẩn cùng origin rồi đọc DOM.
+# Không mở tab mới -> tránh trang "Security Check" (slider) của TikTok.
+_CDP_PRODUCT_DETAIL_IFRAME_JS = r"""
+(async () => {
+    const pid = '__PID__';
+    const url = 'https://shop.tiktok.com/view/product/' + pid;
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'position:fixed;left:-9999px;top:0;width:1280px;height:1400px;';
+    ifr.src = url;
+    document.body.appendChild(ifr);
+
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const loaded = await new Promise((res) => {
+        let done = false;
+        ifr.onload = () => { if (!done) { done = true; res(true); } };
+        setTimeout(() => { if (!done) { done = true; res(false); } }, 15000);
+    });
+
+    const out = { id: pid, name: '', url: url, description: '', reviews: [] };
+    try {
+        await wait(4000);
+        const d = ifr.contentDocument;
+        const w = ifr.contentWindow;
+        if (!d) return out;
+        if (d.body && d.body.innerText.includes('Verify to continue')) return out;
+
+        out.id = (d.location.href.match(/(?:view\/product|pdp)\/(\d{6,})/) || [])[1] || pid;
+        const h1 = d.querySelector('h1') || d.querySelector('[class*="H4-Semibold"]');
+        out.name = norm(h1 && h1.innerText).slice(0, 400);
+
+        // Mô tả: ưu tiên khối ngay sau tiêu đề "Mô tả sản phẩm"
+        const hd = [...d.querySelectorAll('div,span,p,h2,h3')]
+            .find(e => e.children.length === 0 && /^mô tả sản phẩm$/i.test(norm(e.innerText)));
+        let blocks = [];
+        if (hd) {
+            let node = hd.parentElement;
+            for (let i = 0; node && i < 4; i++) {
+                const cands = [...node.querySelectorAll('div,p,span')]
+                    .filter(e => e.children.length === 0 && norm(e.innerText).length >= 60)
+                    .map(e => norm(e.innerText));
+                if (cands.length) { blocks = cands; break; }
+                node = node.parentElement;
+            }
+        }
+        if (!blocks.length) {
+            blocks = [...d.querySelectorAll('div,p,span')]
+                .filter(e => e.children.length === 0 && norm(e.innerText).length >= 120)
+                .map(e => norm(e.innerText))
+                .filter(t => !/^\d+(\.\d+)?$/.test(t));
+        }
+        const seenB = new Set();
+        out.description = blocks.filter(b => !seenB.has(b) && seenB.add(b)).join('\n').slice(0, 3000);
+
+        // Đánh giá: cuộn xuống khu review để lazy-load, rồi đọc từng item
+        const box = d.querySelector('[class*="reviews-"]');
+        if (box) {
+            box.scrollIntoView();
+            for (let i = 0; i < 8; i++) { w.scrollBy(0, 900); await wait(450); }
+            const list = [...box.children].pop();
+            const cont = list && [...list.children].pop();
+            if (cont) {
+                for (const it of cont.children) {
+                    const leaf = [...it.querySelectorAll('*')].filter(c => c.children.length === 0 && norm(c.innerText));
+                    const txts = leaf.map(c => norm(c.innerText));
+                    if (!txts.length) continue;
+                    const user = txts[0] || '';
+                    // Câu dài nhất, không phải nhãn hệ thống
+                    const body = txts.filter(s => s.length >= 15 && !/đã xác minh|mặt hàng|^\d{4}-\d{2}-\d{2}$|^\+\d+$/i.test(s))
+                                      .sort((a, b) => b.length - a.length)[0] || '';
+                    if (!body) continue;
+                    const date = txts.find(s => /^\d{4}-\d{2}-\d{2}$/.test(s)) || '';
+                    out.reviews.push(user + ': ' + body + (date ? ' (' + date + ')' : ''));
+                }
+            }
+        }
+    } catch (e) {
+        /* tra ve nhung gi da co */
+    } finally {
+        try { ifr.remove(); } catch (e) { /* ignore */ }
+    }
+    return out;
+})()
+"""
+
+
+# Script JS quét bảng sản phẩm trong giỏ hàng live (DOM virtual list)
+_CDP_PRODUCTS_JS = r"""
+(() => {
+    // Dashboard hiện dùng VIRTUAL LIST (không còn <tr>/arco-table-tr).
+    // Mỗi sản phẩm là 1 div.rounded-4.mb-8 cao ~90-200px trong
+    // [class*="virtualized-container"]. Đọc text con để lấy tên/giá/tồn.
+    const out = [];
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const isPrice = (s) => /^[0-9.,]+\s*\u20ab$/.test(s);
+    const seen = new Set();
+
+    const roots = [
+        ...document.querySelectorAll('div.rounded-4.mb-8'),
+        ...document.querySelectorAll('[class*="virtualized-container"] div[class*="rounded-4"]'),
+    ];
+
+    let idx = 0;
+    for (const el of roots) {
+        const rect = el.getBoundingClientRect();
+        if (rect.height < 80 || rect.height > 320 || rect.width < 200) continue;
+        if (roots.some(o => o !== el && o.contains(el))) continue;
+
+        const leaves = [...el.querySelectorAll('*')]
+            .filter(c => c.children.length === 0 && norm(c.innerText))
+            .map(c => norm(c.innerText));
+        if (!leaves.length) continue;
+
+        const name = leaves.find(s => s.length >= 12 && !isPrice(s) &&
+            !/^(Lựa chọn yêu thích|Đã yêu cầu minh họa|Còn:)/i.test(s));
+        if (!name) continue;
+
+        const prices = leaves.filter(isPrice);
+        const stock = leaves.find(s => /^Còn:/i.test(s)) || '';
+        const pinned = leaves.some(s => /Lựa chọn yêu thích|Đang ghim/i.test(s));
+        const key = name.slice(0, 80);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        idx += 1;
+        out.push({
+            index: idx,
+            id: '',
+            name: name,
+            price: prices[0] || '',
+            is_pinned: pinned,
+            url: '',
+            raw: { stock: stock, origin_price: prices[1] || '', dom: true },
+        });
+        if (idx >= 200) break;
+    }
+    return out;
+})()
+"""
+
+
+def _product_id_from_url(url: str) -> str:
+    """Tách product_id (>=10 chữ số) từ URL sản phẩm TikTok Shop. Rỗng nếu không có."""
+    m = re.search(r"(?:product_id|productId|id)=([0-9]{6,})", url or "")
+    if not m:
+        m = re.search(r"/(?:view/product|product|pdp|p)/([0-9]{6,})", url or "")
+    return m.group(1) if m else ""
+
+
+def _cdp_eval(ws, expr: str, req_id: int = 1, timeout_s: float = 20.0):
+    """Gửi Runtime.evaluate và trả về giá trị đã parse JSON (nếu là chuỗi JSON)."""
+    ws.send(json.dumps({
+        "id": req_id,
+        "method": "Runtime.evaluate",
+        "params": {"expression": expr, "returnByValue": True, "awaitPromise": True},
+    }))
+    deadline = time.monotonic() + max(1.0, timeout_s)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            resp = json.loads(ws.recv(timeout=remaining))
+        except Exception:
+            return None
+        if resp.get("id") != req_id:
+            continue
+        res = resp.get("result", {})
+        if res.get("exceptionDetails"):
+            return None
+        val = res.get("result", {}).get("value")
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return val
+        return val
+
+
+def _connect_cdp(cdp_port: int = 30899, timeout_s: float = 5.0):
+    """Mở kết nối websocket tới tab TikTok Shop. Trả (ws, None) hoặc (None, lý do)."""
+    try:
+        from websockets.sync.client import connect
+    except ImportError:
+        return None, "Thiếu thư viện websockets"
+    target = get_cdp_target(cdp_port=cdp_port)
+    if not target or not target.get("webSocketDebuggerUrl"):
+        return None, f"Không tìm thấy tab TikTok Shop trên cổng CDP {cdp_port}"
+    return connect(target["webSocketDebuggerUrl"], open_timeout=timeout_s, close_timeout=2), None
+
+
+def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
+    """Đọc danh sách sản phẩm trong giỏ hàng live trực tiếp từ DOM qua CDP.
+
+    Dashboard dùng virtual list (không còn <tr>/arco-table-tr); API
+    live_product/list cần msToken dùng-một-lần nên gọi lại luôn rỗng
+    -> quét DOM là cách duy nhất ổn định. Trả về list dict:
+    index, id, name, price, is_pinned, url, raw. Lỗi/không có browser -> [].
+    """
+    ws, err = _connect_cdp(cdp_port=cdp_port)
+    if ws is None:
+        if err:
+            print(f"[browser] {err}")
+        return []
+    try:
+        with ws:
+            data = _cdp_eval(ws, _CDP_PRODUCTS_JS, req_id=9001, timeout_s=20.0)
+        if not isinstance(data, list):
+            return []
+        products: list[dict] = []
+        for i, p in enumerate(data, 1):
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name") or "").strip()
+            if not name:
+                continue
+            products.append({
+                "index": int(p.get("index") or i),
+                "id": str(p.get("id") or ""),
+                "name": name,
+                "price": str(p.get("price") or ""),
+                "is_pinned": bool(p.get("is_pinned")),
+                "url": str(p.get("url") or ""),
+                "raw": p.get("raw") if isinstance(p.get("raw"), dict) else {},
+            })
+        return products
+    except Exception as e:
+        print(f"[browser] Lỗi fetch_live_products_cdp: {e}")
+        return []
+
+
 def crawl_product_detail_cdp(
     url: str,
     cdp_port: int = 30899,
     max_reviews: int = 10,
-    timeout_s: float = 25.0,
+    timeout_s: float = 60.0,
 ) -> dict:
-    """Mở link sản phẩm trong TAB RIÊNG rồi lấy tên, mô tả, comment/đánh giá đầu tiên.
+    """Lấy tên, mô tả, đánh giá của 1 sản phẩm qua iframe ẩn trong tab dashboard.
 
-    Tab dashboard đang chạy live KHÔNG bị điều hướng; tab crawl được đóng sau khi xong.
-    Trả về dict: id, name, url, description, reviews (tối đa max_reviews phần tử).
-    Lỗi/timeout -> dict rỗng, không raise.
+    Không mở tab mới (tab mới bị TikTok chặn bằng "Security Check"), cũng không
+    điều hướng tab dashboard đang chạy live. Trả về dict: id, name, url,
+    description, reviews (tối đa max_reviews phần tử). Lỗi/timeout -> dict rỗng.
     """
     empty = {"id": "", "name": "", "url": url or "", "description": "", "reviews": []}
     if not url:
+        return empty
+
+    pid = _product_id_from_url(url)
+    if not pid:
+        print(f"[browser] Không tách được product_id từ URL: {url}")
         return empty
 
     try:
@@ -1498,65 +1462,33 @@ def crawl_product_detail_cdp(
         print("[browser] Thiếu thư viện websockets")
         return empty
 
-    # 1. Mo tab rieng cho trang san pham
-    target_id = _cdp_new_tab(url, cdp_port=cdp_port)
-    if not target_id:
-        print(f"[browser] Không mở được tab sản phẩm: {url}")
+    ws, err = _connect_cdp(cdp_port=cdp_port)
+    if ws is None:
+        print(f"[browser] {err}")
         return empty
 
-    data = None
+    script = _CDP_PRODUCT_DETAIL_IFRAME_JS.replace("__PID__", pid)
     try:
-        ws = _cdp_ws_for_target(target_id, cdp_port=cdp_port)
-        if ws is None:
-            return empty
         with ws:
-            # 2. Cho trang load xong (readyState === 'complete')
-            deadline = time.monotonic() + max(3.0, float(timeout_s))
-            req = 0
-            while time.monotonic() < deadline:
-                req += 1
-                ws.send(json.dumps({
-                    "id": req + 9200,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": "document.readyState", "returnByValue": True},
-                }))
-                state = None
-                sub_deadline = time.monotonic() + 3.0
-                while time.monotonic() < sub_deadline:
-                    try:
-                        r = json.loads(ws.recv(timeout=max(0.2, sub_deadline - time.monotonic())))
-                    except Exception:
-                        break
-                    if r.get("id") == req + 9200:
-                        state = r.get("result", {}).get("result", {}).get("value")
-                        break
-                if state == "complete":
-                    break
-                time.sleep(1.0)
-            time.sleep(1.5)  # doi DOM render not (comment/description thuong load sau)
-
-            # 3. Lay du lieu
-            data = _cdp_eval(ws, _CDP_PRODUCT_DETAIL_JS, req_id=9300, timeout_s=timeout_s)
-
-        if not isinstance(data, dict):
-            return empty
-        reviews = data.get("reviews")
-        if not isinstance(reviews, list):
-            reviews = []
-        limit = max(0, int(max_reviews))
-        return {
-            "id": str(data.get("id") or ""),
-            "name": str(data.get("name") or ""),
-            "url": str(data.get("url") or url),
-            "description": str(data.get("description") or ""),
-            "reviews": [str(r) for r in reviews[:limit]],
-        }
+            # Không đổi URL tab dashboard -> không cần khôi phục, không rủi ro SPA.
+            data = _cdp_eval(ws, script, req_id=9300, timeout_s=timeout_s)
     except Exception as e:
         print(f"[browser] Lỗi crawl_product_detail_cdp ({url}): {e}")
         return empty
-    finally:
-        # 4. Dong tab crawl -> dashboard dang live khong bi anh huong
-        _cdp_close_tab(target_id, cdp_port=cdp_port)
+
+    if not isinstance(data, dict):
+        return empty
+    reviews = data.get("reviews")
+    if not isinstance(reviews, list):
+        reviews = []
+    limit = max(0, int(max_reviews))
+    return {
+        "id": str(data.get("id") or pid),
+        "name": str(data.get("name") or ""),
+        "url": str(data.get("url") or url),
+        "description": str(data.get("description") or ""),
+        "reviews": [str(r) for r in reviews[:limit]],
+    }
 
 
 def _live_dir(live_dir: str | Path | None = None) -> Path:

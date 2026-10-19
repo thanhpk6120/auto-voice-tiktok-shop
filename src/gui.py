@@ -566,8 +566,9 @@ class App:
         btn_reload.pack(side="left", padx=4)
         ToolTip(
             btn_reload,
-            "Kết nối CDP vào trình duyệt và đọc trực tiếp danh sách sản phẩm trong mục Sản phẩm của "
-            "https://shop.tiktok.com/streamer/live/product/dashboard. Chỉ dùng logic đọc DOM, không dùng AI.",
+            "Kết nối CDP vào trình duyệt và lấy danh sách sản phẩm trong mục Sản phẩm của "
+            "https://shop.tiktok.com/streamer/live/product/dashboard (gọi API live_product/list từ trang, "
+            "dự phòng quét DOM). Không dùng AI.",
         )
 
         self.btn_load_ctx = ttk.Button(top_bar, text="📥 Load context-live", command=self._load_context_live)

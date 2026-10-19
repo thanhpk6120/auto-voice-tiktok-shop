@@ -130,6 +130,7 @@ FIELD_OPTIONS: dict[str, list[str]] = {
     "browser_mode": ["gologin_cdp", "extension"],
     "log_level": ["INFO", "DEBUG", "WARNING", "ERROR"],
     "voicestudio_model": ["tts-1", "tts-1-hd"],
+    # Chi la mac dinh tinh: GUI thay bang danh sach dong tu VoiceStudio (ke ca giong da clone).
     "voicestudio_voice": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
 }
 
@@ -142,7 +143,7 @@ FIELD_DOCS: dict[str, str] = {
     "analyst_llm_model": "Model AI chuyên PHÂN TÍCH bình luận/hoạt động để biết khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, từ đó chọn đúng loại prompt. Ví dụ: openrouter/typesafe/jev-router. Bấm nút 'Tải danh sách model' ở tab Quản lý Prompt để chọn từ danh sách thật của server. Để trống để tắt phân tích bằng AI và dùng luật từ khoá dự phòng.",
     "analyst_llm_timeout_s": "Thời gian chờ tối đa (giây) cho bước phân tích ý định. Nếu quá hạn sẽ tự động dùng luật từ khoá dự phòng.",
     "voicestudio_url": "Địa chỉ VoiceStudio Local API (mặc định: http://127.0.0.1:3900).",
-    "voicestudio_voice": "Tên giọng đọc: alloy, echo, fable, onyx, nova, shimmer hoặc tên giọng bạn đã clone trong VoiceStudio.",
+    "voicestudio_voice": "Giọng đọc. Danh sách lấy trực tiếp từ VoiceStudio: alias OpenAI (alloy, echo...) và các giọng bạn đã clone. Với giọng clone, chọn mục có dạng 'Tên  <voice_id>'.",
     "voicestudio_model": "Model TTS trong VoiceStudio (tts-1 tốc độ nhanh hoặc tts-1-hd chất lượng cao).",
     "tts_timeout_s": "Thời gian chờ tối đa (giây) cho quá trình tạo file âm thanh từ text.",
     "bridge_url": "Địa chỉ WebSocket bridge nhận sự kiện từ Chrome Extension (ws://127.0.0.1:8765/ws?role=app).",

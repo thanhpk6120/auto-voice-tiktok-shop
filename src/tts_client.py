@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import struct
 import threading
 import time
@@ -73,6 +74,73 @@ def health(timeout: float = 3.0) -> dict:
     return out
 
 
+_voices_cache: dict = {"url": "", "aliases": set(), "by_name": {}, "profiles": []}
+
+
+def list_voices(force: bool = False) -> dict:
+    """Danh sach voice cua VoiceStudio: alias OpenAI + profile da clone.
+
+    Tra {"aliases": set[str], "by_name": {ten_thuong: voice_id}, "profiles": [dict]}.
+    Cache theo URL de khong goi lai moi lan synthesize.
+    """
+    if not force and _voices_cache["url"] == VOICE_URL and _voices_cache["by_name"] is not None:
+        return _voices_cache
+    aliases: set[str] = set()
+    by_name: dict[str, str] = {}
+    profiles: list[dict] = []
+    url = f"{VOICE_URL}/v1/audio/voices"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        for v in data.get("voices") or []:
+            vid = str(v.get("voice_id") or "").strip()
+            if not vid:
+                continue
+            if str(v.get("type")) == "profile":
+                profiles.append(v)
+                nm = str(v.get("name") or "").strip().casefold()
+                if nm:
+                    by_name.setdefault(nm, vid)
+            else:
+                aliases.add(vid.casefold())
+        _voices_cache.update(url=VOICE_URL, aliases=aliases, by_name=by_name, profiles=profiles)
+    except Exception:
+        pass
+    return _voices_cache
+
+
+def resolve_voice(name: str) -> tuple[str, str]:
+    """Doi `voicestudio_voice` thanh voice_id ma VoiceStudio hieu.
+
+    VoiceStudio 0.5.6 chi nhan voice_id cua profile (vd `ef920857`), KHONG nhan ten
+    (vd `SonTungMTP`) va KHONG bao loi — ten la se bi lang le dung giong mac dinh.
+    Tra (voice_id, canh_bao); canh_bao rong khi resolve duoc hoac la alias hop le.
+    """
+    raw = str(name or "").strip()
+    # Dropdown GUI hien "Ten  <voice_id>" -> uu tien voice_id trong ngoac nho
+    m = re.search(r"<([^<>]+)>\s*$", raw)
+    if m:
+        raw = m.group(1).strip()
+    if not raw:
+        return "default", ""
+    key = raw.casefold()
+    info = list_voices()
+    if not info["aliases"] and not info["by_name"]:
+        return raw, ""          # khong doc duoc danh sach -> giu nguyen, khong doan
+    if key in info["aliases"] or key == "default":
+        return raw, ""
+    if any(key == str(p.get("voice_id") or "").strip().casefold() for p in info["profiles"]):
+        return raw, ""          # da la voice_id hop le
+    vid = info["by_name"].get(key)
+    if vid:
+        return vid, ""
+    return raw, (
+        f"voice '{raw}' khong co trong VoiceStudio — se bi doc bang giong MAC DINH. "
+        f"Danh sach dung duoc: {', '.join(sorted(info['aliases'])[:6])}"
+        + (f" hoac voice_id profile: {', '.join(p['voice_id'] for p in info['profiles'])}" if info["profiles"] else "")
+    )
+
+
 def synthesize(text: str, out_dir: str | Path = "out") -> Path:
     """Gửi text sang VoiceStudio; fail thì fallback tạo sine wav."""
     global VOICESTUDIO_OK, LAST_ENGINE
@@ -85,10 +153,13 @@ def synthesize(text: str, out_dir: str | Path = "out") -> Path:
     h = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8]
     wav_path = p / f"tts_{ts}_{h}.wav"
 
+    voice_id, _warn = resolve_voice(VOICE_NAME)
+    if _warn:
+        print(f"[tts] {_warn}", flush=True)
     data = json.dumps({
         "model": VOICE_MODEL,
         "input": text,
-        "voice": VOICE_NAME,
+        "voice": voice_id,
         "response_format": "wav",
     }).encode("utf-8")
     req = urllib.request.Request(

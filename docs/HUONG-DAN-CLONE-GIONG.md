@@ -52,15 +52,26 @@ Sau khi đã tạo xong giọng đọc trên VoiceStudio:
 2. Chuyển sang tab **Cấu hình** (Settings).
 3. Tìm đến phần **VoiceStudio TTS**:
    - **`voicestudio_url`**: Giữ nguyên `http://127.0.0.1:3900` (địa chỉ của VoiceStudio).
-   - **`voicestudio_voice`**: Nhập chính xác tên giọng đọc bạn đã đặt ở Bước 2 (ví dụ: `streamer_nu_mien_nam`).
+   - **`voicestudio_voice`**: Mở dropdown và chọn giọng bạn vừa clone. Danh sách được app
+     đọc trực tiếp từ VoiceStudio, giọng clone hiển thị dạng `Ten  <voice_id>` (ví dụ `SonTungMTP  <ef920857>`).
+     Bấm **🔄 Làm mới** cạnh ô này nếu bạn vừa tạo thêm giọng mới mà chưa thấy trong danh sách.
    - **`voicestudio_model`**: Chọn `tts-1` hoặc `tts-1-hd`.
 4. Bấm nút **"Lưu cấu hình"** ở dưới cùng.
 5. Bấm **"Khởi động lại ứng dụng"** hoặc chạy lệnh thử nghiệm.
+
+> **Quan trọng — tên giọng vs mã giọng:** VoiceStudio 0.5.6 chỉ nhận **voice_id** của giọng clone
+> (một mã ngắn như `ef920857`), **không nhận tên** (`SonTungMTP`). Nếu truyền tên, VoiceStudio
+> **không báo lỗi** mà lặng lẽ đọc bằng giọng mặc định — đây là lý do phổ biến nhất khiến "clone
+> rồi mà nghe không giống". App đã tự đổi tên thành voice_id khi tên khớp duy nhất, và cảnh báo
+> nếu tên không tồn tại. Chạy `doctor` để kiểm tra dòng `voice='...' -> <voice_id>`.
 
 ---
 
 ## 5. Bước 4: Kiểm tra giọng đọc vừa clone
 
+0. Xác nhận app đang dùng đúng mã giọng: chạy `AutoVoiceTikTokShop.exe doctor`, dòng
+   `VoiceStudio` phải hiện `voice='...' -> <voice_id>`. Nếu thấy `CANH BAO: voice ... se bi doc
+   bang giong MAC DINH`, quay lại chọn lại giọng trong dropdown.
 1. Chuyển sang tab **Điều khiển** trên ứng dụng Auto Voice.
 2. Bấm nút **"Chạy Simulator (Thử nghiệm)"**.
 3. Quan sát khung nhật ký:

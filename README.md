@@ -371,7 +371,26 @@ Từ câu gốc, app sinh thêm **9 câu khác** (tổng 10) rồi phát ngẫu 
 
 ### 12.7 Clone giọng nói
 
-Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUONG-DAN-CLONE-GIONG.md): chuẩn bị file mẫu 5–15s → tạo voice trong VoiceStudio (CosyVoice / GPT-SoVITS) → đặt tên vào `voicestudio_voice` → kiểm tra bằng Simulator.
+Xem hướng dẫn đầy đủ tại [`docs/HUONG-DAN-CLONE-GIONG.md`](docs/HUONG-DAN-CLONE-GIONG.md): chuẩn bị file mẫu 5–15s → tạo voice trong VoiceStudio (CosyVoice / GPT-SoVITS) → chọn giọng trong dropdown → kiểm tra bằng Simulator.
+
+**Tên giọng vs mã giọng (lỗi hay gặp nhất)**
+
+VoiceStudio 0.5.6 chỉ nhận **voice_id** của giọng clone (mã ngắn như `ef920857`) trong `/v1/audio/speech`;
+truyền **tên** (`SonTungMTP`) **không gây lỗi** nhưng VoiceStudio lặng lẽ đọc bằng giọng mặc định —
+nghe như "clone rồi mà không giống".
+
+App xử lý việc này ở `tts_client`:
+
+| Hàm | Việc |
+|---|---|
+| `list_voices()` | Đọc `/v1/audio/voices`, tách `aliases` (OpenAI) và `profiles` (giọng đã clone), cache theo URL |
+| `resolve_voice(name)` | Tên duy nhất → đổi sang `voice_id`; đã là `voice_id`/alias → giữ nguyên; không tồn tại → trả cảnh báo |
+| `synthesize()` | Gọi `resolve_voice` trước khi POST, in cảnh báo ra log nếu tên sai |
+
+GUI: dropdown `voicestudio_voice` lấy **danh sách động** từ VoiceStudio, giọng clone hiển thị dạng
+`Tên  <voice_id>`; khi lưu chỉ ghi **voice_id trần**; nút **🔄 Làm mới** đọc lại sau khi tạo giọng mới.
+`doctor` in thêm `voice='...' -> <voice_id>`, và trả **FAIL kèm cảnh báo** nếu tên không tồn tại.
+
 ### 12.8 Bổ sung sau khi kiểm chứng end-to-end
 
 - **Không chờ nhau:** `PriorityAudioQueue` phát xong 1 câu → callback `on_finish` gọi `collector.wake()`

@@ -315,6 +315,17 @@ class _Field:
                 self.var = tk.StringVar(value="" if self.original is None else str(self.original))
             if self.key == "audio_device":
                 self.widget = ttk.Combobox(parent, textvariable=self.var, values=app._device_labels(), width=46)
+            elif self.key == "voicestudio_voice":
+                # Danh sach dong: alias OpenAI + profile da clone trong VoiceStudio.
+                # Duoc xu ly TRUOC nhanh FIELD_OPTIONS (voicestudio_voice cung nam trong do).
+                self.widget = ttk.Combobox(
+                    parent,
+                    textvariable=self.var,
+                    values=app._voice_labels(),
+                    width=46,
+                )
+                app.voice_widget = self.widget
+                self.var.set(app._voice_label_for(self.var.get()))
             elif self.key in getattr(settings, "FIELD_OPTIONS", {}):
                 opts = settings.FIELD_OPTIONS[self.key]
                 state = "normal" if self.key in ("voicestudio_voice", "voicestudio_model") else "readonly"
@@ -377,8 +388,12 @@ class _Field:
             btn_act.grid(row=row, column=2, padx=2)
             btn_mgr = ttk.Button(parent, text="Quản lý Chrome...", command=app._open_chrome_manager_dialog)
             btn_mgr.grid(row=row, column=3, padx=2)
+        elif self.key == "voicestudio_voice":
+            btn_v = ttk.Button(parent, text="🔄 Làm mới", command=app._refresh_voices)
+            btn_v.grid(row=row, column=2, padx=4)
         if self.key == "audio_device":
             app.device_widget = self.widget
+
     def toggle_secret(self) -> None:
         showing = self.widget.cget("show") == ""
         self.widget.configure(show="*" if showing else "")
@@ -390,6 +405,9 @@ class _Field:
             return bool(raw)
         if self.key == "audio_device":
             return device_spec(raw)
+        if self.key == "voicestudio_voice":
+            # Luu voice_id tran, khong luu nhan hien thi 'Ten  <voice_id>'
+            return self.app._voice_id_of(raw)
         if self.key == "gologin_profile_id":
             return extract_profile_id(raw)
         return coerce_value(raw, self.original)
@@ -463,6 +481,7 @@ class App:
         ]
         config_frames: dict[str, ttk.Frame] = {}
         self.fields: list[_Field] = []
+        self.voice_widget = None
         for sec in build_form(settings.SECTIONS, self.cfg, settings.SECRET_KEYS):
             sec_name = sec["section"]
             frame = ttk.Frame(self.nb, padding=6)
@@ -1349,6 +1368,50 @@ class App:
                     self._refresh_chrome_versions()
                 if key in ("gologin_dir", "gologin_profiles_dir"):
                     self._refresh_profiles()
+
+    def _voice_label_for(self, value: str) -> str:
+        """Doi gia tri da luu (thuong la voice_id) thanh nhan hien thi trong dropdown."""
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        for label in self._voice_labels():
+            if label == raw or label.endswith(f"<{raw}>"):
+                return label
+        return raw
+
+    def _voice_id_of(self, label: str) -> str:
+        """Nhan dropdown -> gia tri luu config (voice_id tran)."""
+        raw = str(label or "").strip()
+        m = re.search(r"<([^<>]+)>\s*$", raw)
+        return m.group(1).strip() if m else raw
+
+    def _voice_labels(self) -> list[str]:
+        """Nhan hien thi cho dropdown giong doc: alias OpenAI + profile da clone.
+
+        Dinh dang `Ten  <voice_id>` cho profile de nguoi dung thay ma van chon duoc bang ten.
+        """
+        alias = list(getattr(settings, "FIELD_OPTIONS", {}).get("voicestudio_voice", []))
+        try:
+            import tts_client
+
+            info = tts_client.list_voices()
+            for p in info.get("profiles", []):
+                alias.append(f"{p.get('name')}  <{p.get('voice_id')}>")
+        except Exception:
+            pass
+        return alias
+
+    def _refresh_voices(self) -> None:
+        """Doc lai danh sach giong tu VoiceStudio (sau khi clone them giong moi)."""
+        try:
+            import tts_client
+
+            tts_client.list_voices(force=True)
+            if getattr(self, "voice_widget", None) is not None:
+                self.voice_widget.configure(values=self._voice_labels())
+            self._write("[VoiceStudio] Đã đọc lại danh sách giọng đọc.")
+        except Exception as e:
+            self._write(f"[VoiceStudio] Làm mới giọng lỗi: {type(e).__name__}: {e}")
 
     def _gologin_profile_ids(self) -> list[str]:
         try:

@@ -370,9 +370,18 @@ def handle_run(args) -> int:
 
 def _check_voicestudio() -> tuple[bool, str]:
     h = tts_client.health()
-    if h["ok"]:
-        return True, f"OK {h['url']} v{h['version']} ({h['voices']} voices)"
-    return False, f"FAIL {h['url']} -> {h['error']}"
+    if not h["ok"]:
+        return False, f"FAIL {h['url']} -> {h['error']}"
+    msg = f"OK {h['url']} v{h['version']} ({h['voices']} voices)"
+    # Canh bao khi ten giong cau hinh khong ton tai: VoiceStudio se lang le doc giong mac dinh.
+    try:
+        vid, warn = tts_client.resolve_voice(getattr(tts_client, "VOICE_NAME", ""))
+        msg += f" voice='{tts_client.VOICE_NAME}' -> {vid}"
+        if warn:
+            return False, f"{msg}\n       CANH BAO: {warn}"
+    except Exception:
+        pass
+    return True, msg
 
 
 def _check_llm() -> tuple[bool, str]:

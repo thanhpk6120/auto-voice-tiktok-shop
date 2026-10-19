@@ -410,6 +410,12 @@ GUI: dropdown `voicestudio_voice` lấy **danh sách động** từ VoiceStudio,
 
 ## 13. Tính năng nâng cấp: Crawl sản phẩm, Phân loại ý định & Prompt JSON
 
+> **Nguyên tắc dữ liệu:** mọi câu thoại sinh ra đều phải bám **context-live hiện tại**.
+> `context-data/` chỉ là dự phòng khi `context-live/` rỗng. Không có prompt mẫu, câu chào
+> fallback hay dữ liệu simulator nào chứa sẵn tên sản phẩm/giá — nếu không LLM sẽ đọc
+> quảng cáo món khách không hề nhắc.
+
+
 ### 13.1 Danh sách sản phẩm Live đọc từ browser (không dùng AI)
 
 Nút **🔄 Tải lại giỏ hàng live** (tab *Sản phẩm Live*) đọc dashboard
@@ -519,8 +525,10 @@ của đơn hàng/quà tặng.
 - Gặp `429` thì **tạm hoãn gọi model phân tích 30 giây** (`rate_limit_remaining_s()` cho biết còn bao lâu)
   để không dội thêm request vào server đang giới hạn tần suất. Hết thời gian hoãn sẽ tự thử lại.
   Đây là backoff nhẹ, không có tầng cache/retry phức tạp.
-- Câu hỏi sản phẩm: dò sản phẩm trong **context-live trước**, fallback **context-data**
-  (`ChatIntent` đọc cả hai thư mục, sản phẩm từ context-live thắng khi hoà điểm).
+- Câu hỏi sản phẩm: dò sản phẩm trong **context-live** — nguồn **duy nhất** khi thư mục này
+  đã có sản phẩm. `context-data` chỉ được nạp khi `context-live` rỗng (chưa đồng bộ giỏ hàng
+  live), nên sản phẩm demo (`sp-01-ao-thun`, `sp-02-kem-duong`, `sp-03-tai-nghe`) không bao giờ
+  lẫn vào câu trả lời trên live thật.
 
 ### 13.4 Tab **Quản lý Prompt** (sửa prompt ngay trong app)
 
@@ -565,8 +573,8 @@ có dấu) và tự ép kiểu.
 
 ### 13.6 Sản phẩm khách đang xem (`viewing_product`)
 
-Sự kiện này đi qua đúng luồng phân tích: đối chiếu sản phẩm với **context-live trước**, fallback
-**context-data**, rồi gọi LLM với prompt `system_sales` để tư vấn đúng sản phẩm. Mẫu câu cứng chỉ
+Sự kiện này đi qua đúng luồng phân tích: đối chiếu sản phẩm với **context-live**, rồi gọi LLM
+với prompt `system_sales` để tư vấn đúng sản phẩm. Mẫu câu cứng chỉ
 dùng khi LLM lỗi.
 
 ### 13.7 Chống lặp câu chào (`src/phrase_cache.py`)

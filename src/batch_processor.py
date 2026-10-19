@@ -416,7 +416,10 @@ def process_event_batch(
             "users": joined_users,
         }
 
-    # Đọc ngữ cảnh sản phẩm từ context-live + context-data
+    # Đọc ngữ cảnh sản phẩm từ context-live (nguồn duy nhất khi đã đồng bộ giỏ hàng live).
+    # CHỈ sản phẩm được nhắc tới trong chính sự kiện mới vào prompt. Trước đây khi không
+    # match được gì, code nhồi 5 sản phẩm đầu tiên, nên một câu "Alo" bị LLM đọc thành lời
+    # chào kèm quảng cáo kem dưỡng ẩm — sản phẩm khách không hề nhắc.
     intent = ChatIntent(context_dir, live_dir=context_live_dir) if context_dir is not None else _get_intent()
     matched_products: list[dict] = []
     seen_prods: set[str] = set()
@@ -427,8 +430,6 @@ def process_event_batch(
         if prod and prod["name"] not in seen_prods:
             seen_prods.add(prod["name"])
             matched_products.append(prod)
-    if not matched_products and intent.products:
-        matched_products.extend(intent.products[:5])
 
     # ===== Nhóm sự kiện theo Ý DỊNH rồi gọi LLM với ĐÚNG prompt cho từng nhóm =====
     # Số lời gọi LLM <= số intent có mặt trong lô (không tăng theo số sự kiện).
@@ -458,11 +459,26 @@ def process_event_batch(
                 item["count"] = ev.get("count", 1)
             group_payload.append(item)
 
+        # Ngữ cảnh sản phẩm RIÊNG cho nhóm này: chỉ những sản phẩm chính các sự kiện
+        # trong nhóm nhắc tới. Nhóm greeting/chào hỏi KHÔNG nhận ngữ cảnh sản phẩm —
+        # chào hỏi không cần bán hàng, và trước đây chính nó kéo kem dưỡng ẩm vào câu chào.
+        group_products: list[dict] = []
+        if group_intent != "greeting":
+            gseen: set[str] = set()
+            for ev in group_events:
+                gtxt = ev.get("text") or ev.get("product") or ""
+                gprod = intent.match(gtxt)
+                if gprod and gprod["name"] not in gseen:
+                    gseen.add(gprod["name"])
+                    group_products.append(gprod)
+            if not group_products:
+                group_products = matched_products
         ctx_str = "\n".join(
             f"- Tên: {pp['name']} | Giá: {pp.get('price') or 'ưu đãi'} | Số thứ tự: {pp.get('index') or '-'}\n"
             f"  Mô tả: {(pp.get('description') or (pp.get('ctx') or '')).strip()[:400]}"
-            for pp in matched_products[:5]
-        ) or "Chưa có thông tin sản phẩm cụ thể."
+            for pp in group_products[:3]
+        ) or ("(không có — câu chào không cần nhắc sản phẩm, KHÔNG quảng cáo món nào)"
+              if group_intent == "greeting" else "KHÔNG CÓ SẢN PHẨM NÀO KHỚP")
         if group_intent == "greeting":
             try:
                 import phrase_cache
@@ -471,16 +487,37 @@ def process_event_batch(
                 avoid_ctx = ""
             if avoid_ctx:
                 ctx_str = f"{ctx_str}\n\n{avoid_ctx}"
-        user_prompt = (
-            f"Ngữ cảnh sản phẩm trên live (context-live + context-data):\n{ctx_str}\n\n"
-            f"Nhóm ý định: {group_intent}\n"
-            f"Danh sách sự kiện thuộc nhóm này:\n"
-            f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
-            f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
-            f"dùng đúng các khoá: {{\"type\": \"{group_intent}\", \"user\": \"tên khách\", "
-            f"\"text\": \"câu thoại tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
-            f"Không thêm lời dẫn, không markdown, không ```json."
-        )
+        if group_intent == "greeting":
+            user_prompt = (
+                f"Ngữ cảnh: {ctx_str}\n\n"
+                f"Nhóm ý định: greeting (khách vừa vào phòng / vừa chào shop)\n"
+                f"Danh sách sự kiện thuộc nhóm này:\n"
+                f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
+                f"YÊU CẦU: chỉ chào hỏi ngắn gọn và mời khách ở lại xem lai. TUYỆT ĐỐI không "
+                f"giới thiệu, không quảng cáo, không nêu tên sản phẩm hay giá — khách chưa hỏi.\n\n"
+                f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
+                f"dùng đúng các khoá: {{\"type\": \"greeting\", \"user\": \"tên khách\", "
+                f"\"text\": \"câu chào tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
+                f"Không thêm lời dẫn, không markdown, không ```json."
+            )
+        else:
+            no_match = "KHÔNG CÓ SẢN PHẨM NÀO KHỚP" in ctx_str
+            user_prompt = (
+                f"Ngữ cảnh sản phẩm trên live (lấy từ context-live hiện tại):\n{ctx_str}\n\n"
+                f"Nhóm ý định: {group_intent}\n"
+                f"Danh sách sự kiện thuộc nhóm này:\n"
+                f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
+                + (
+                    "CẢNH BÁO: khách nhắc một sản phẩm KHÔNG có trong giỏ hàng live hiện tại. "
+                    "Tuyệt đối KHÔNG bịa tên sản phẩm, chất liệu hay giá. Hãy nói sóp chưa thấy "
+                    "món đó trong giỏ hàng và mời khách xem các món đang bán, hoặc hỏi lại rõ tên món.\n\n"
+                    if no_match and group_intent != "greeting" else ""
+                ) +
+                f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
+                f"dùng đúng các khoá: {{\"type\": \"{group_intent}\", \"user\": \"tên khách\", "
+                f"\"text\": \"câu thoại tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
+                f"Không thêm lời dẫn, không markdown, không ```json."
+            )
 
         try:
             from src import llm_client as _llm

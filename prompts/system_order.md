@@ -22,4 +22,4 @@ Hãy sinh MỘT câu chúc mừng và xác nhận đơn hàng.
 CHỈ trả về DUY NHẤT một object JSON hợp lệ. Không thêm lời dẫn, không markdown, không ```json.
 
 JSON mẫu:
-{"speak_text": "Chúc mừng chị Lan Anh đã chốt đơn áo thun nam Cốt-tần Com-pắc với giá một trăm năm mươi nghìn đồng, sóp cảm ơn chị nhiều lắm!", "kind": "order", "priority": 1}
+{"speak_text": "Chúc mừng chị Lan Anh đã chốt đơn thành công, sóp cảm ơn chị nhiều lắm!", "kind": "order", "priority": 1}

@@ -299,7 +299,10 @@ _VI_STOPWORDS = {
 
 
 class ChatIntent:
-    """Detect câu hỏi về SP từ context-data/*.md và trả lời RAG."""
+    """Detect câu hỏi về SP từ context-live/*.md và trả lời RAG.
+
+    context-live là nguồn chính; context-data chỉ dùng khi context-live chưa có sản phẩm.
+    """
 
     def __init__(self, context_dir: str | Path = "context-data", live_dir: str | Path | None = None):
         p = Path(context_dir)
@@ -327,13 +330,17 @@ class ChatIntent:
         self._load()
     def _load(self) -> None:
         self.products.clear()
-        dirs_to_scan = [self.context_dir]
-        if self.live_dir and self.live_dir.is_dir() and self.live_dir != self.context_dir:
-            dirs_to_scan.append(self.live_dir)
+        # context-live là nguồn DUY NHẤT khi nó đã có sản phẩm: mọi câu sinh ra phải dựa
+        # trên giỏ hàng live hiện tại. context-data chỉ là phương án dự phòng khi chưa
+        # đồng bộ được live — nếu không, sản phẩm demo (áo thun, kem dưỡng, tai nghe)
+        # sẽ lẫn vào live thật và LLM quảng cáo món khách không hề nhắc.
+        if self.live_dir and self.live_dir.is_dir():
+            self._scan_dir(self.live_dir)
+        if not self.products and self.context_dir.is_dir() and self.context_dir != self.live_dir:
+            self._scan_dir(self.context_dir)
 
-        for target_dir in dirs_to_scan:
-            if not target_dir.is_dir():
-                continue
+    def _scan_dir(self, target_dir: Path) -> None:
+        if target_dir.is_dir():
             for md in sorted(target_dir.glob("*.md")):
                 if md.name.lower() in ("readme.md", "_index.md"):
                     continue
@@ -589,7 +596,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "Bạn là bộ phân loại ý định bình luận livestream bán hàng TikTok Shop.\n"
             "Nhãn hợp lệ: greeting, product_question, order, gift, chat, other.\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
-            'JSON mẫu: {"intent": "product_question", "product_hint": "áo thun nam", "confidence": 0.92}'
+            'JSON mẫu: {"intent": "product_question", "product_hint": "cụm từ sản phẩm khách dùng", "confidence": 0.92}'
         )
     if name == "system_sales":
         return (
@@ -602,7 +609,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "5. Trả lời nhiệt tình, dài 50-80 từ, tập trung chốt đơn vào giỏ hàng.\n"
             "6. Không dùng markdown, bullet, emoji.\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
-            'JSON mẫu: {"speak_text": "Chị Lan Anh ơi, sóp xác nhận đúng mẫu áo thun nam Cốt-tần Com-pắc, giá ưu đãi một trăm năm mươi nghìn đồng, chị bấm giỏ hàng chốt đơn nhé!", "kind": "sales", "priority": 2}'
+            'JSON mẫu: {"speak_text": "Chị Lan Anh ơi, sóp xác nhận đúng mẫu chị đang xem, giá ưu đãi đúng như trong giỏ hàng, chị bấm giỏ hàng chốt đơn nhé!", "kind": "sales", "priority": 2}'
         )
     elif name == "system_chat":
         return (
@@ -614,7 +621,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "3. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "4. Toàn bộ là tiếng Việt có dấu, không emoji, không viết số, phiên âm từ tiếng Anh sang tiếng Việt (shop -> sóp, live -> lai).\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
-            'JSON mẫu: {"speak_text": "Dạ sóp chào bạn, sóp đang lai món ăn vặt cực ngon, bạn ở lại xem thử nhé!", "kind": "chat", "priority": 2}'
+            'JSON mẫu: {"speak_text": "Dạ sóp chào bạn, bạn ở lại xem lai với sóp cho vui nhé!", "kind": "chat", "priority": 2}'
         )
     elif name == "system_batch":
         return (
@@ -734,7 +741,7 @@ def generate_by_intent(
             ctx_parts.append(f"- Link: {product.get('url')}")
         desc = (product.get("description") or "").strip()
         if not desc:
-            # File context-data cũ không có section mô tả -> dùng toàn bộ nội dung file
+            # File cũ không có section mô tả -> dùng toàn bộ nội dung file
             desc = (product.get("ctx") or "").strip()
         if desc:
             ctx_parts.append(f"- Mô tả: {desc[:1500]}")
@@ -744,7 +751,7 @@ def generate_by_intent(
             revs = []
         if isinstance(revs, list) and revs:
             ctx_parts.append("- Đánh giá của khách trước đó: " + " | ".join(str(r) for r in revs[:5]))
-        ctx_parts.append(f"- Nguồn dữ liệu: {'context-live' if product.get('live') else 'context-data'}")
+        ctx_parts.append(f"- Nguồn dữ liệu: {'context-live (giỏ hàng đang bán)' if product.get('live') else 'context-data (dự phòng)'}")
     if context_note:
         ctx_parts.append(context_note)
     if intent == "greeting":
@@ -791,7 +798,7 @@ def generate_by_intent(
 def _greeting_fallback(user: str) -> str:
     """Câu chào dự phòng khi LLM lỗi/không trả về nội dung (ưu tiên câu chưa dùng)."""
     templates = [
-        f"Chào {user}, sóp đây! Bạn đang ngắm món ăn vặt nào thế nè?",
+        f"Chào {user}, sóp đây! Bạn đang ngắm món nào thế nè?",
         f"Dạ sóp chào {user}, sóp nghe đây ạ! Bạn bấm giỏ hàng góc trái xem món ngon nhé!",
         f"Chào {user}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
         f"Chào {user}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
@@ -817,7 +824,7 @@ def answer_by_intent(user: str, text: str, products: list[dict] | None = None) -
     """Phân loại ý định rồi sinh câu thoại phù hợp.
 
     Trả về {"intent", "source", "prompt", "speak_text", "product"}.
-    Sản phẩm tra trong context-live trước, fallback context-data (ChatIntent đã gộp cả hai).
+    Sản phẩm tra trong context-live; context-data chỉ dùng khi context-live rỗng.
     """
     try:
         import intent_router
@@ -865,7 +872,7 @@ def answer_general_chat(user: str, text: str) -> str:
         or s in ("alo", "alo shop", "shop ơi", "sóp ơi", "chào shop", "hello shop", "hi shop", "có ai không")
     ):
         fast_replies = [
-            f"Chào {u}, sóp đây! Bạn đang ngắm món ăn vặt nào thế nè?",
+            f"Chào {u}, sóp đây! Bạn đang ngắm món nào thế nè?",
             f"Dạ sóp chào {u}, sóp nghe đây ạ! Bạn bấm giỏ hàng góc trái xem món ngon nhé!",
             f"Chào {u}, sóp đây ạ! Bạn cần sóp tư vấn món gì cứ nhắn lên đây nha!",
             f"Chào {u}, sóp đây! Vào xem lai nhớ thả tim và bấm giỏ hàng ủng hộ sóp nha!",
@@ -914,7 +921,7 @@ def answer_general_chat(user: str, text: str) -> str:
     except Exception:
         pass
 
-    return phoneticize_vietnamese(f"Chào {u}, sóp nghe đây ạ! Bạn bấm vào giỏ hàng góc trái xem các món ăn vặt ngon nhé!")
+    return phoneticize_vietnamese(f"Chào {u}, sóp nghe đây ạ! Bạn bấm vào giỏ hàng góc trái xem các món đang ưu đãi nhé!")
 
 def analyze(event: dict, use_batcher: bool = True) -> dict:
     """Map event -> {kind, priority, speak_text}."""
@@ -973,7 +980,7 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             if m_v:
                 product = m_v.group(1).strip()
         
-        # Đối chiếu context-live trước, fallback context-data (ChatIntent gộp cả hai)
+        # Đối chiếu context-live; context-data chỉ là dự phòng khi live chưa đồng bộ
         matched = _get_intent().match(product) if product else None
         p_display = matched["name"] if matched else (product or "sản phẩm trên live")
 

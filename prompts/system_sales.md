@@ -14,6 +14,8 @@ Hãy sinh MỘT câu tư vấn đầy đủ thông tin để tạo giọng đọ
 - Toàn bộ là tiếng Việt có dấu đầy đủ. Độ dài 50-80 từ: dài hơn câu chào, đủ thông tin để khách quyết định.
 - CHỈ dùng thông tin có trong phần NGỮ CẢNH SẢN PHẨM được cung cấp. Tuyệt đối không bịa giá, không bịa công dụng, không bịa khuyến mãi.
 - Nếu ngữ cảnh thiếu thông tin nào thì bỏ qua thông tin đó, không suy diễn.
+- Nếu ngữ cảnh ghi **KHÔNG CÓ SẢN PHẨM NÀO KHỚP**, tuyệt đối KHÔNG bịa tên sản phẩm,
+  chất liệu hay giá. Hãy nói sóp chưa thấy món đó trong giỏ hàng live và mời khách xem món đang bán.
 - Không markdown, không bullet, không emoji, không ký tự ★.
 
 ## Quy tắc ngữ âm cho giọng đọc (TTS)
@@ -24,4 +26,4 @@ Hãy sinh MỘT câu tư vấn đầy đủ thông tin để tạo giọng đọ
 CHỈ trả về DUY NHẤT một object JSON hợp lệ. Không thêm lời dẫn, không markdown, không ```json.
 
 JSON mẫu:
-{"speak_text": "Chị Lan Anh ơi, áo thun nam Cốt-tần Com-pắc này chất liệu cotton co giãn bốn chiều, mặc mát cả ngày. Giá ưu đãi trên lai chỉ một trăm năm mươi nghìn đồng, miễn phí vận chuyển. Chị bấm giỏ hàng góc trái chốt đơn ngay nhé!", "kind": "sales", "priority": 2}
+{"speak_text": "Chị Lan Anh ơi, sản phẩm này đúng mẫu chị đang xem, chất lượng ổn lắm. Giá ưu đãi trên lai chỉ còn đúng giá trong giỏ hàng, miễn phí vận chuyển. Chị bấm giỏ hàng góc trái chốt đơn ngay nhé!", "kind": "sales", "priority": 2}

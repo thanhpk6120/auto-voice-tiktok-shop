@@ -146,3 +146,116 @@ def test_get_prompt_from_prompts_dir():
     p_batch = get_prompt("system_batch")
     assert len(p_batch) > 100
     assert "json" in p_batch.lower()
+
+
+def test_greeting_prompt_has_no_product_context(monkeypatch):
+    """Câu chào không được kéo sản phẩm vào prompt.
+
+    Hồi quy: khi không match được sản phẩm nào, code cũ nhồi 5 sản phẩm đầu tiên vào
+    ctx_str, nên một câu "Alo" bị LLM đọc thành lời chào kèm quảng cáo kem dưỡng ẩm.
+    """
+    import batch_processor as bp
+
+    seen_prompts: list[str] = []
+
+    def fake_chat(system, user, model=None, timeout=None):
+        # Bo qua prompt PHAN LOAI y dinh (no liet ke san pham de phan loai, hop le);
+        # chi ghi lai prompt SINH CAU THOAI.
+        if "MẢNG JSON" in user:
+            seen_prompts.append(user)
+        return '[{"type": "greeting", "user": "Thanh", "text": "Chào Thanh nhé!", "priority": 3}]'
+
+    import llm_client
+    import src.llm_client as src_llm
+
+    # batch_processor import ca `src.llm_client` lan `llm_client` -> 2 module object khac nhau
+    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    monkeypatch.setattr(src_llm, "chat", fake_chat)
+
+    items = bp.process_event_batch(
+        [{"type": "chat", "user": "Thanh", "text": "Alo"}],
+        max_events=5,
+        prompts_dir=str(ROOT / "prompts"),
+        context_dir=str(ROOT / "context-data"),
+        context_live_dir=str(ROOT / "context-live"),
+    )
+    assert items, "phải sinh được câu thoại"
+    assert len(seen_prompts) == 1
+    prompt = seen_prompts[0]
+    for leak in ("kem dưỡng", "Giá:", "- Tên:", "Số thứ tự"):
+        assert leak not in prompt, f"prompt greeting bị lẫn ngữ cảnh sản phẩm: {leak!r}"
+    assert "không quảng cáo" in prompt.lower() or "không nêu tên sản phẩm" in prompt.lower()
+
+
+def test_chat_product_question_still_gets_product_context(monkeypatch):
+    """Nhóm không phải greeting vẫn phải nhận ngữ cảnh sản phẩm khách hỏi."""
+    import batch_processor as bp
+    import llm_client
+
+    seen: list[str] = []
+
+    def fake_chat(system, user, model=None, timeout=None):
+        if "MẢNG JSON" in user:
+            seen.append(user)
+        return '[{"type": "sales", "user": "Minh", "text": "Áo thun này đây ạ.", "priority": 2}]'
+
+    import src.llm_client as src_llm
+
+    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    monkeypatch.setattr(src_llm, "chat", fake_chat)
+    items = bp.process_event_batch(
+        [{"type": "chat", "user": "Minh", "text": "bánh tráng trộn giá bao nhiêu shop"}],
+        max_events=5,
+        prompts_dir=str(ROOT / "prompts"),
+        context_dir=str(ROOT / "context-data"),
+        context_live_dir=str(ROOT / "context-live"),
+    )
+    assert items
+    assert seen, "phải gọi LLM"
+    # Ngữ cảnh sản phẩm phải lấy từ context-live, đúng sản phẩm khách hỏi
+    assert "Bánh Tráng Trộn" in seen[0], "câu hỏi sản phẩm phải có ngữ cảnh từ context-live"
+    assert "Áo thun nam Cotton Compact" not in seen[0], "không được lẫn sản phẩm demo context-data"
+
+
+def test_unmatched_product_gets_no_fabrication_warning(monkeypatch):
+    """Khách hỏi món không có trong context-live -> prompt phải cấm bịa sản phẩm."""
+    import batch_processor as bp
+    import llm_client
+    import src.llm_client as src_llm
+
+    seen: list[str] = []
+
+    def fake_chat(system, user, model=None, timeout=None):
+        if "MẢNG JSON" in user:
+            seen.append(user)
+        return '[{"type": "sales", "user": "Thanh", "text": "Sóp chưa thấy món đó nha.", "priority": 2}]'
+
+    monkeypatch.setattr(llm_client, "chat", fake_chat)
+    monkeypatch.setattr(src_llm, "chat", fake_chat)
+
+    bp.process_event_batch(
+        [{"type": "chat", "user": "Thanh", "text": "Áo thun còn không shop"}],
+        max_events=5,
+        prompts_dir=str(ROOT / "prompts"),
+        context_dir=str(ROOT / "context-data"),
+        context_live_dir=str(ROOT / "context-live"),
+    )
+    assert seen, "phải gọi LLM"
+    prompt = seen[0]
+    assert "KHÔNG CÓ SẢN PHẨM NÀO KHỚP" in prompt
+    assert "KHÔNG bịa tên sản phẩm" in prompt
+    # Không được lẫn sản phẩm demo từ context-data
+    assert "Áo thun nam Cotton Compact" not in prompt
+    assert "Kem dưỡng da cấp ẩm Water Gel" not in prompt
+
+
+def test_context_live_is_the_only_source_when_present():
+    """context-live có sản phẩm -> context-data (demo) không được nạp."""
+    from event_analyzer import ChatIntent
+
+    it = ChatIntent(str(ROOT / "context-data"), live_dir=str(ROOT / "context-live"))
+    assert it.products, "phải nạp sản phẩm từ context-live"
+    assert all(p.get("live") for p in it.products)
+    names = " ".join(p["name"].lower() for p in it.products)
+    for demo in ("áo thun nam cotton compact", "kem dưỡng da cấp ẩm water gel", "tai nghe true wireless"):
+        assert demo not in names, f"lẫn sản phẩm demo: {demo}"

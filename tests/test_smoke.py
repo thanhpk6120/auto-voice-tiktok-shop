@@ -25,13 +25,23 @@ def test_greeting_batch():
     assert any(x in flushed for x in ["Chào", "Hello", "Xin chào", "What'up", "Hê-lô", "Goắt-sắp"])
 
 def test_price_reply():
-    intent = ChatIntent(os.path.join(os.path.dirname(__file__), "..", "context-data"))
+    """Trả lời giá dựa trên context-live (nguồn duy nhất khi đã đồng bộ giỏ hàng live).
+
+    Test cũ dùng sản phẩm demo "áo thun" trong context-data; sản phẩm đó không còn được
+    nạp nữa để mọi câu sinh ra đều bám sát giỏ hàng live hiện tại.
+    """
+    root = os.path.join(os.path.dirname(__file__), "..")
+    intent = ChatIntent(os.path.join(root, "context-data"), live_dir=os.path.join(root, "context-live"))
     intent._load()
-    assert len(intent.products) > 0
-    
-    ans = intent.answer("cái áo thun này giá bao nhiêu")
+    assert len(intent.products) > 0, "phải nạp được giỏ hàng live"
+    assert all(p.get("live") for p in intent.products), "chỉ dùng sản phẩm context-live"
+    assert not any("áo thun" in p["name"].lower() for p in intent.products)
+
+    ans = intent.answer("bánh tráng trộn giá bao nhiêu")
     assert ans is not None
-    assert any(x in ans.lower() for x in ["150000", "150.000", "150k", "một trăm năm mươi nghìn", "năm mươi nghìn"])
+    assert "29.000" in ans or "hai mươi chín nghìn" in ans.lower()
+
+
 def test_queue_priority():
     q = PriorityAudioQueue()
     q.put("greeting", 3, "Hello", "join.wav")

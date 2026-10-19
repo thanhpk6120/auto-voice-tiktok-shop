@@ -33,7 +33,7 @@ Mỗi sự kiện quan trọng phải có đúng MỘT câu thoại tương ứn
 JSON mẫu:
 [
   {"type": "greeting", "user": "Minh Tuấn", "text": "Xin chào Minh Tuấn đã ghé thăm gian hàng, ở lại xem giúp sóp nhé!", "priority": 3},
-  {"type": "sales", "user": "Lan Anh", "text": "Chị Lan Anh ơi, áo thun nam Cốt-tần Com-pắc chất liệu cotton co giãn, giá ưu đãi một trăm năm mươi nghìn đồng, chị bấm giỏ hàng góc trái chốt đơn nhé!", "priority": 2}
+  {"type": "sales", "user": "Lan Anh", "text": "Chị Lan Anh ơi, sản phẩm này đúng mẫu chị hỏi, giá ưu đãi đúng như trong giỏ hàng, chị bấm giỏ hàng góc trái chốt đơn nhé!", "priority": 2}
 ]
 
 - "type": một trong "greeting", "sales", "chat", "order", "gift", "viewing_product".

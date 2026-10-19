@@ -15,14 +15,14 @@ DEFAULT_USERS = [
     "Đức Huy", "Ngọc Mai", "Thanh Tùng", "Khánh Linh", "Văn Hậu"
 ]
 
+# Cau hoi chung, khong gan voi san pham cu the nao (simulator khong nen fix cung SP).
 CHAT_TEMPLATES = [
-    "Áo thun cotton có size XL không shop?",
-    "Shop ơi kem dưỡng da da dầu dùng được không?",
-    "Tai nghe bass boost có bảo hành không ạ?",
-    "Cho em hỏi giá áo thun hôm nay bao nhiêu?",
-    "Kem dưỡng ẩm còn hàng không shop?",
-    "Tai nghe bluetooth này dùng được mấy tiếng vậy?",
+    "Sản phẩm này còn hàng không shop?",
     "Có freeship không ạ?",
+    "Sản phẩm này giá bao nhiêu vậy shop?",
+    "Còn size này không shop?",
+    "Bảo hành thế nào ạ?",
+    "Có ship tỉnh không shop?",
 ]
 
 GIFTS = [
@@ -32,18 +32,41 @@ GIFTS = [
     {"gift_name": "Tên lửa", "count": 1},
 ]
 
-ORDERS = [
-    {"product": "Áo thun nam Cotton Compact", "amount": 150000},
-    {"product": "Kem dưỡng da cấp ẩm Water Gel", "amount": 350000},
-    {"product": "Tai nghe True Wireless Bass Boost", "amount": 450000},
-]
+def _live_products() -> list[dict]:
+    """Doc gio hang live tu context-live. Rong neu chua dong bo duoc."""
+    try:
+        import sys
+        from pathlib import Path
 
-# Su kien "dang xem san pham": TikTok Shop phat khi khach bam vao SP trong gio hang.
-VIEWING_PRODUCTS = [
-    "Áo thun nam Cotton Compact",
-    "Kem dưỡng da cấp ẩm Water Gel",
-    "Tai nghe True Wireless Bass Boost",
-]
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from event_analyzer import ChatIntent
+
+        return ChatIntent("context-data", live_dir="context-live").products
+    except Exception:
+        return []
+
+
+def _order_pool() -> list[dict]:
+    prods = _live_products()
+    if not prods:
+        return [{"product": "Sản phẩm trong giỏ hàng", "amount": 0}]
+    return [{"product": p["name"], "amount": _price_int(p)} for p in prods[:8]]
+
+
+def _viewing_pool() -> list[str]:
+    prods = _live_products()
+    return [p["name"] for p in prods[:8]] or ["Sản phẩm trong giỏ hàng"]
+
+
+def _price_int(prod: dict) -> int:
+    """Gia dang chu ('5.000₫') -> so nguyen; 0 neu khong doc duoc."""
+    import re
+
+    digits = re.sub(r"[^\d]", "", str(prod.get("price") or ""))
+    try:
+        return int(digits) if digits else 0
+    except ValueError:
+        return 0
 
 
 def iter_events(
@@ -54,6 +77,9 @@ def iter_events(
     """Generator sinh chuỗi event vô hạn (hoặc lấy theo n) có tính lặp lại theo seed."""
     rng = random.Random(seed)
     current_ts = base_ts if base_ts is not None else time.time()
+    # Lay san pham tu gio hang live hien tai thay vi danh sach fix cung.
+    order_pool = _order_pool()
+    viewing_pool = _viewing_pool()
 
     # Phase 1: Tạo cụm join dồn dập trong khoảng 3s để test batching
     for i in range(burst_join_count):
@@ -89,7 +115,7 @@ def iter_events(
                 "ts": ts,
             }
         elif ev_type == "viewing_product":
-            product = rng.choice(VIEWING_PRODUCTS)
+            product = rng.choice(viewing_pool)
             yield {
                 "type": "viewing_product",
                 "user": user,
@@ -107,7 +133,7 @@ def iter_events(
                 "ts": ts,
             }
         elif ev_type == "order":
-            order_info = rng.choice(ORDERS)
+            order_info = rng.choice(order_pool)
             yield {
                 "type": "order",
                 "user": user,

@@ -40,7 +40,7 @@ _OPENERS = [
 def _local_variants(base: str, count: int = 9) -> list[str]:
     """Dựng biến thể cục bộ (không gọi LLM) từ chính câu nhắc gốc."""
     core = re.sub(r"^(mọi người|cả nhà)[^,]*,\s*", "", (base or "").strip(), flags=re.I).strip(" ,.")
-    topic = core or "nhớ thả tim và bình luận cho sóp nhé"
+    topic = core or "nhớ để lại tương tác cho sóp nhé"
     topic = topic[0].upper() + topic[1:] if topic else topic
     out: list[str] = []
     for opener in _OPENERS:

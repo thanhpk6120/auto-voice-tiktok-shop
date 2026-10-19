@@ -17,7 +17,7 @@ Bạn là bộ phân loại ý định bình luận livestream bán hàng TikTok
 CHỈ trả về DUY NHẤT một object JSON hợp lệ. Không thêm lời dẫn, không markdown, không ```json.
 
 JSON mẫu:
-{"intent": "product_question", "product_hint": "áo thun nam", "confidence": 0.92}
+{"intent": "product_question", "product_hint": "<cụm từ sản phẩm khách dùng, chép nguyên văn>", "confidence": 0.92}
 
 ## Quy tắc
 - "intent": một trong các nhãn hợp lệ ở trên, viết thường, không dấu cách.

@@ -96,7 +96,7 @@ JSON mẫu (trả đúng các khoá này):
 
 Quy tắc:
 - "intent": một trong các nhãn hợp lệ ở trên, viết thường.
-- "product_hint": nếu khách nhắc tới sản phẩm cụ thể thì ghi lại ĐÚNG cụm từ khách dùng (vd: "áo thun nam"); nếu không nhắc thì để chuỗi rỗng "".
+- "product_hint": nếu khách nhắc tới sản phẩm cụ thể thì ghi lại ĐÚNG cụm từ khách dùng (chép nguyên văn, không thay bằng tên khác); nếu không nhắc thì để chuỗi rỗng "".
 - "confidence": số thực từ 0 đến 1.
 """ 
 

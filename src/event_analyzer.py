@@ -848,6 +848,24 @@ def answer_by_intent(user: str, text: str, products: list[dict] | None = None) -
         if product is None:
             product = _get_intent().match(text)
 
+    # Hỏi sản phẩm nhưng KHÔNG có món nào trong context-live khớp -> không gọi LLM
+    # (LLM sẽ bịa tên/giá). Trả lời thẳng là chưa thấy món đó trong giỏ hàng live.
+    if intent == "product_question" and product is None:
+        u_show = user if user and user not in ("Khách", "bạn mới") else "bạn"
+        ask = (cls.get("product_hint") or "").strip()
+        target = f"món {ask}" if ask else "món đó"
+        speak = phoneticize_vietnamese(
+            f"Dạ sóp chưa thấy {target} trong giỏ hàng lai hiện tại nha {u_show}. "
+            f"Bạn kiểm tra lại tên giúp sóp, hoặc bấm xem các món đang bán trong giỏ hàng nhé!"
+        )
+        return {
+            "intent": intent,
+            "source": cls.get("source", "rule"),
+            "prompt": intent_router.prompt_for_intent(intent),
+            "speak_text": speak,
+            "product": None,
+        }
+
     speak = generate_by_intent(user, text, intent, product=product)
     return {
         "intent": intent,
@@ -923,6 +941,67 @@ def answer_general_chat(user: str, text: str) -> str:
 
     return phoneticize_vietnamese(f"Chào {u}, sóp nghe đây ạ! Bạn bấm vào giỏ hàng góc trái xem các món đang ưu đãi nhé!")
 
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F000-\U0001F2FF"
+    "\u2190-\u21FF\u2B00-\u2BFF\uFE0F\u200D"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    """Bo emoji/khoi ky hieu khoi ten san pham khach go."""
+    return re.sub(r"\s+", " ", _EMOJI_RE.sub(" ", str(text or ""))).strip()
+
+
+def _illustrate_product(user: str, raw_text: str, hinted: str, matched: dict | None) -> dict:
+    """Khach bam 'Yeu cau minh hoa' -> streamer noi ve dung san pham do.
+
+    `hinted` la ten khach go; `matched` la san pham trong context-live khop duoc.
+    Khong khop -> KHONG bia: neu ro chua thay mon do trong gio hang live.
+    """
+    if matched is None:
+        ask = hinted.strip()
+        target = f"món {ask}" if ask else "món đó"
+        return {
+            "kind": "sales",
+            "priority": 1,
+            "speak_text": phoneticize_vietnamese(
+                f"Dạ sóp chưa thấy {target} trong giỏ hàng lai hiện tại nha {user}. "
+                f"Bạn kiểm tra lại tên món giúp sóp, hoặc bấm xem các món đang bán trong giỏ hàng nhé!"
+            ),
+            "intent": "product_question",
+            "product": None,
+        }
+
+    reply = generate_by_intent(
+        user,
+        f"Khách yêu cầu sóp minh họa (nói rõ về) sản phẩm: {matched['name']}"
+        + (f' (khách viết: "{_strip_emoji(raw_text)}")' if raw_text else ""),
+        "product_question",
+        product=matched,
+    )
+    if not reply:
+        price_str = (
+            f", giá ưu đãi chỉ {phoneticize_vietnamese(matched['price'])}"
+            if matched.get("price") else ""
+        )
+        reply = phoneticize_vietnamese(
+            f"Dạ {user} ơi, sóp minh họa món {matched['name']} liền nè{price_str}. "
+            f"Sản phẩm này đang bán rất chạy, bạn bấm vào giỏ hàng chốt đơn kẻo hết nhé!"
+        )
+    return {
+        "kind": "sales",
+        "priority": 1,
+        "speak_text": reply,
+        "intent": "product_question",
+        "product": matched,
+    }
+
+
 def analyze(event: dict, use_batcher: bool = True) -> dict:
     """Map event -> {kind, priority, speak_text}."""
     ev = event or {}
@@ -940,6 +1019,18 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
 
     if typ in ("chat", "comment", "message"):
         text = str(ev.get("text") or ev.get("message") or ev.get("content") or "").strip()
+        # Khach bam "Yeu cau minh hoa" trong gio hang -> xin streamer noi ve 1 san pham.
+        # Phai nhan dien o day vi extension/CDP cu chi gui ve type 'chat'.
+        m_ill = re.search(
+            r"(?:muốn\s+xem|yêu\s+cầu|đã\s+yêu\s+cầu)?\s*minh\s+họa\s+sản\s+phẩm\s*(.*)$",
+            text,
+            re.I,
+        )
+        if m_ill:
+            hinted = _strip_emoji(m_ill.group(1)).strip(" .!,-")
+            matched_ill = _get_intent().match(hinted) if hinted else None
+            return _illustrate_product(user, text, hinted, matched_ill)
+
         res = answer_by_intent(user, text)
         intent = res["intent"]
         kind = "sales" if intent == "product_question" else ("greeting" if intent == "greeting" else "chat")
@@ -980,14 +1071,29 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             if m_v:
                 product = m_v.group(1).strip()
         
+        product = _strip_emoji(product)
+
         # Đối chiếu context-live; context-data chỉ là dự phòng khi live chưa đồng bộ
         matched = _get_intent().match(product) if product else None
-        p_display = matched["name"] if matched else (product or "sản phẩm trên live")
+
+        # Sản phẩm khách nhắc KHÔNG có trong context-live -> không bịa, nói rõ chưa thấy.
+        if product and matched is None:
+            return {
+                "kind": "viewing_product",
+                "priority": 1,
+                "speak_text": phoneticize_vietnamese(
+                    f"Dạ sóp chưa thấy món {product.strip()} trong giỏ hàng lai hiện tại nha {user}. "
+                    f"Bạn kiểm tra lại tên món giúp sóp, hoặc bấm xem các món đang bán trong giỏ hàng nhé!"
+                ),
+                "product": None,
+            }
+
+        p_display = matched["name"] if matched else "sản phẩm trên live"
 
         # Sinh câu thoại bằng LLM với đúng prompt tư vấn sản phẩm
         reply = generate_by_intent(
             user,
-            f"Khách đang xem sản phẩm: {p_display}"
+            f"Khách xin sóp minh họa (giới thiệu kỹ) sản phẩm: {p_display}"
             + (f' (khách viết: "{raw_text}")' if raw_text else ""),
             "product_question",
             product=matched,
@@ -998,7 +1104,7 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
                 if matched and matched.get("price") else ""
             )
             reply = phoneticize_vietnamese(
-                f"Dạ sóp chào {user}, mình đang xem {p_display}{price_str} đúng không ạ? "
+                f"Dạ {user} ơi, sóp minh họa món {p_display} liền nè{price_str}. "
                 f"Sản phẩm này đang bán rất chạy, bạn bấm vào giỏ hàng chốt đơn kẻo hết nhé!"
             )
         return {

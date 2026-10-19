@@ -40,7 +40,10 @@ CDP_SETUP_JS = r"""
     window.__tiktok_cdp_observers = [];
     window.__tiktok_cdp_queue_v2 = window.__tiktok_cdp_queue_v2 || [];
 
-    const JUNK_PHRASES = [
+    // Nhan UI cua dashboard. CHI so khop khi ca dong gan nhu chi co nhan do —
+    // khop theo tien to (startsWith) tung nuot ca comment that:
+    //   "Sản phẩm này còn hàng không shop?" -> bi coi la nhan "sản phẩm" -> mat su kien.
+    const JUNK_EXACT = [
         'bình luận của người xem sẽ xuất hiện ở đây',
         'các đơn hàng đặt trong live của bạn sẽ hiển thị tại đây',
         'hoạt động của người xem sẽ xuất hiện ở đây',
@@ -51,6 +54,7 @@ CDP_SETUP_JS = r"""
         'trò chuyện',
         'hoạt động',
         'tất cả',
+        'tất cả hoạt động',
         'xem thêm',
         'thêm kịch bản',
         'không có bảng tin video',
@@ -62,6 +66,7 @@ CDP_SETUP_JS = r"""
         'voucher',
         'sản phẩm',
         '0/100', '1/100', '2/100',
+        'đã yêu cầu minh họa',
         'yêu cầu minh họa',
         'thêm vào giỏ',
         'xem sản phẩm',
@@ -71,6 +76,9 @@ CDP_SETUP_JS = r"""
         'người theo dõi',
         'chào mừng bạn đến với tiktok live'
     ];
+    // Nhan he thong chi duoc phep xuat hien O DAU dong, va dong phai ngan
+    // (nhan UI that su rat ngan). Comment cua khach dai hon nguong nay.
+    const JUNK_PREFIX_MAX = 22;
 
     const DATE_TIME_RE = /^(\d{1,2}[/.\-]\d{1,2}([/.\-]\d{2,4})?(\s+\d{1,2}(:\d{2})*)?|\d{1,2}:\d{2}(:\d{2})?)$/;
 
@@ -81,8 +89,10 @@ CDP_SETUP_JS = r"""
         const s = text.trim().toLowerCase();
         if (s.length < 2) return true;
         if (DATE_TIME_RE.test(s)) return true;
-        for (const phrase of JUNK_PHRASES) {
-            if (s === phrase || s.startsWith(phrase)) return true;
+        for (const phrase of JUNK_EXACT) {
+            if (s === phrase) return true;
+            // 'nhan + (0/100)' hoac 'nhan' dung mot minh o dau dong ngan -> van la nhan UI
+            if (s.startsWith(phrase) && s.length <= JUNK_PREFIX_MAX) return true;
         }
         return false;
     }
@@ -215,7 +225,14 @@ CDP_SETUP_JS = r"""
                             let text = raw;
 
                             const s = raw.toLowerCase();
-                            if (s.includes('đặt hàng') || s.includes('mua') || s.includes('chốt đơn') || s.includes('ordered')) {
+                            // Khach bam "Yeu cau minh hoa" o gio hang -> xin streamer noi ve 1 san pham.
+                            // Phai bat TRUOC order/gift: chuoi nay chua ca 'xem san pham' lan 'san pham'.
+                            const mIll = raw.match(/^(.{1,40}?)\s+(?:đã\s+|vừa\s+)?(?:muốn\s+xem|yêu\s+cầu|đã\s+yêu\s+cầu)?\s*minh\s+họa\s+sản\s+phẩm\s*(.*)$/i);
+                            if (mIll) {
+                                user = mIll[1].trim();
+                                text = (mIll[2] || '').trim() || raw;
+                                evType = 'viewing_product';
+                            } else if (s.includes('đặt hàng') || s.includes('mua') || s.includes('chốt đơn') || s.includes('ordered')) {
                                 evType = 'order';
                             } else if (s.includes('tặng') || s.includes('đã gửi') || s.includes('gift') || s.includes('hoa hồng')) {
                                 evType = 'gift';
@@ -238,6 +255,12 @@ CDP_SETUP_JS = r"""
                                 if (mGift) {
                                     user = mGift[1].trim();
                                     text = mGift[2].trim() || raw;
+                                }
+                                const mIll2 = raw.match(/^(.{1,40}?)\s+(?:đã\s+|vừa\s+)?(?:muốn\s+xem|yêu\s+cầu|đã\s+yêu\s+cầu)?\s*minh\s+họa\s+sản\s+phẩm\s*(.*)$/i);
+                                if (mIll2) {
+                                    user = mIll2[1].trim();
+                                    text = mIll2[2].trim() || raw;
+                                    evType = 'viewing_product';
                                 }
                                 const mView = raw.match(/([^\s]+(?:\s+[^\s]+){0,3})\s+(?:đang xem sản phẩm|đang xem|bấm xem|viewing product|viewing)\s*(.*)/i);
                                 if (mView) {

@@ -79,6 +79,8 @@
   const GIFT_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đã tặng|vừa tặng|sent|tặng)\s+(?<gift>.+?)(?:\s*[x×*]\s*(?<count>\d+))?\s*$/i;
   const CHAT_RE = /^(?<user>[^:：]{1,40}?)\s*[:：]\s*(?<text>.+)$/;
   const VIEW_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đang xem sản phẩm|đang xem|bấm xem|is viewing product|is viewing)\b(?<product>.*)$/i;
+  // Khach bam "Yeu cau minh hoa" trong gio hang -> xin streamer noi ve 1 san pham.
+  const ILLUSTRATE_RE = /^(?<user>[^:：]{1,40}?)\s+(?:đã\s+|vừa\s+)?(?:muốn\s+xem|yêu\s+cầu|đã\s+yêu\s+cầu)?\s*minh\s+họa\s+sản\s+phẩm\s*(?<product>.*)$/i;
   const AMOUNT_RE = /(\d[\d.,]{2,})/;
 
   const clean = (s) => (s || "").replace(/\s+/g, " ").trim().replace(/^[-–—|:\s]+|[-–—|:\s]+$/g, "");
@@ -104,6 +106,8 @@
       if (rest) event.product = rest;
       return event;
     }
+    m = text.match(ILLUSTRATE_RE);
+    if (m) return { type: "viewing_product", user: clean(m.groups.user), product: clean(m.groups.product) };
     m = text.match(VIEW_RE);
     if (m) {
       return {

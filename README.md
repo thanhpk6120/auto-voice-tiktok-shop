@@ -571,11 +571,26 @@ nên dù LLM có trả về "shop" thì giọng đọc vẫn đúng.
 Trợ giúp đọc khoá: `get_str`, `get_int`, `get_bool` chấp nhận nhiều tên khoá (kể cả tiếng Việt
 có dấu) và tự ép kiểu.
 
-### 13.6 Sản phẩm khách đang xem (`viewing_product`)
+### 13.6 Sản phẩm khách đang xem & **yêu cầu minh họa** (`viewing_product`)
 
-Sự kiện này đi qua đúng luồng phân tích: đối chiếu sản phẩm với **context-live**, rồi gọi LLM
-với prompt `system_sales` để tư vấn đúng sản phẩm. Mẫu câu cứng chỉ
-dùng khi LLM lỗi.
+**Yêu cầu minh họa:** khách bấm nút *Yêu cầu minh họa* ở giỏ hàng → dashboard hiện dòng
+`Thanh muốn xem minh họa sản phẩm Sói 🐺`. Dòng này được nhận diện **trước** các nhánh
+`order`/`gift` (vì chứa cả chữ "sản phẩm" lẫn "xem sản phẩm"), rồi xử lý:
+
+| Bước | Xử lý |
+|---|---|
+| 1 | `CDP_SETUP_JS` / `extension/content.js`: regex `minh họa sản phẩm` → `type=viewing_product`, tách tên món |
+| 2 | `analyze()` (nhánh `chat`): bắt lại cùng regex phòng khi extension/CDP cũ chỉ gửi `chat` |
+| 3 | Bóc emoji khỏi tên món (`_strip_emoji`) — `"Sói 🐺"` → `"Sói"` |
+| 4 | `ChatIntent.match()` đối chiếu **context-live** |
+| 5 | Khớp → `generate_by_intent(..., "product_question", product=matched)` tư vấn đúng món |
+| 6 | **Không khớp → không gọi LLM**, trả lời "sóp chưa thấy món X trong giỏ hàng lai hiện tại" |
+
+Ưu tiên `1` (ngang order/gift) nên chen ngang được câu chào đang chờ.
+
+**Bộ lọc nhiễu (`isJunk`)**: danh sách nhãn UI đổi từ khớp **tiền tố** sang khớp **chính xác**
++ tiền tố chỉ khi dòng ngắn (`JUNK_PREFIX_MAX = 22`). Trước đây `startsWith('sản phẩm')`
+nuốt mất comment thật như *"Sản phẩm này còn hàng không shop?"*.
 
 ### 13.7 Chống lặp câu chào (`src/phrase_cache.py`)
 

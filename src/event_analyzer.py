@@ -341,16 +341,20 @@ class ChatIntent:
                 price = ""
                 for line in text.splitlines():
                     line = line.strip()
-                    if (
-                        line.startswith("Giá:")
-                        or line.startswith("- Giá:")
-                        or line.startswith("- Giá ưu đãi:")
-                    ):
-                        price = line.split(":", 1)[1].strip()
+                    m_price = re.match(
+                        r"^-?\s*giá\s*(?:khuyến mại(?:\s*thực tế(?:\s*trên live)?)?|ưu đãi|niêm yết(?:\s*giỏ hàng)?)?\s*:\s*(.+)$",
+                        line,
+                        flags=re.I,
+                    )
+                    if m_price:
+                        price = m_price.group(1).strip()
                         break
                 # Trích xuất số thứ tự giỏ hàng (index) nếu có
                 p_idx = None
-                idx_match = re.search(r"(?:#|thứ tự\s*(?:trên live)?:\s*số\s*|sp-)(\d+)", text, re.I) or re.search(r"sp-(\d+)", md.stem)
+                idx_match = (
+                    re.search(r"(?:thứ tự\s*(?:trong giỏ hàng(?:\s*live)?|trên live)?:\s*(?:số\s*)?|#|sp-)(\d+)", text, re.I)
+                    or re.search(r"sp-(\d+)", md.stem)
+                )
                 if idx_match:
                     try:
                         p_idx = int(idx_match.group(1))

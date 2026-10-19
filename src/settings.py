@@ -114,7 +114,7 @@ SECTIONS: dict = {
         "gologin_profile_id",
         "browser_mode",
     ],
-    "Khac": ["log_level"],
+    "Khác": ["log_level"],
 }
 
 # Key bi mat - GUI hien thi dang che.

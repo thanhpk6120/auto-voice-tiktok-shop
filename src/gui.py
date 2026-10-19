@@ -695,6 +695,7 @@ class App:
                         continue
                     detail = browser_manager.crawl_product_detail_cdp(url, max_reviews=10)
                     real_p = detail.get("real_price") or detail.get("price") or ""
+                    list_p = str(prod.get("price") or "").strip()
                     merged = dict(prod)
                     merged.update({
                         "id": detail.get("id") or prod.get("id") or "",
@@ -702,6 +703,7 @@ class App:
                         "url": detail.get("url") or url,
                         "description": detail.get("description") or "",
                         "reviews": detail.get("reviews") or [],
+                        "list_price": list_p,
                         "real_price": real_p,
                         "origin_price": detail.get("origin_price") or "",
                         "discount": detail.get("discount") or "",

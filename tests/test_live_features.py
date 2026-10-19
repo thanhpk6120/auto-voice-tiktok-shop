@@ -251,3 +251,37 @@ def test_simulator_emits_viewing_product():
     assert res["kind"] == "viewing_product"
     assert res["priority"] == 1
     assert res["speak_text"]
+
+
+def test_chat_intent_loads_real_promotional_price_and_index():
+    """ChatIntent phải nạp đúng giá khuyến mại thực tế và số thứ tự giỏ hàng từ context-live."""
+    with tempfile.TemporaryDirectory() as td:
+        live_dir = Path(td) / "context-live-test"
+        prod = {
+            "id": "1733809814429206033",
+            "name": "Bim Bim Gà Nướng JOJO",
+            "index": 3,
+            "price": "35.000₫",
+            "list_price": "35.000₫",
+            "real_price": "5.396₫",
+            "origin_price": "43.166₫",
+            "discount": "-87%",
+            "url": "https://shop.tiktok.com/view/product/1733809814429206033",
+            "description": "Snack gà nướng giòn rụm",
+            "reviews": ["Rất ngon"],
+        }
+        saved_file = browser_manager.save_product_context(prod, live_dir=live_dir)
+        assert saved_file is not None and saved_file.exists()
+
+        content = saved_file.read_text(encoding="utf-8")
+        assert "Giá khuyến mại thực tế trên live: 5.396₫ (giá gốc 43.166₫, giảm -87%)" in content
+        assert "Giá niêm yết giỏ hàng: 35.000₫" in content
+
+        # Khởi tạo ChatIntent và kiểm tra sản phẩm đã nạp
+        intent = event_analyzer.ChatIntent(context_dir="context-data", live_dir=live_dir)
+        matched = intent.match("Shop ơi mã 3 bao nhiêu tiền?")
+        assert matched is not None
+        assert matched["name"] == "Bim Bim Gà Nướng JOJO"
+        assert matched["index"] == 3
+        assert "5.396₫" in matched["price"]
+        assert "-87%" in matched["price"]

@@ -1772,7 +1772,7 @@ def save_product_context(product: dict, live_dir: str | Path | None = None) -> P
     real_price = str(product.get("real_price") or "").strip()
     origin_price = str(product.get("origin_price") or "").strip()
     discount = str(product.get("discount") or "").strip()
-    list_price = str(product.get("price") or "Ưu đãi trên live").strip()
+    list_price = str(product.get("list_price") or product.get("price") or "Ưu đãi trên live").strip()
     effective_price = real_price or list_price
 
     url = str(product.get("url") or "").strip()

@@ -168,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     status = ensure_console()  # phai chay truoc install_tee: sau khi tee, stdout khong con fileno()
     install_tee()
     print(f"[launcher] console={status} exe={sys.executable}")
+    settings.apply()
     try:
         import app
 

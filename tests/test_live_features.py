@@ -285,3 +285,26 @@ def test_chat_intent_loads_real_promotional_price_and_index():
         assert matched["index"] == 3
         assert "5.396₫" in matched["price"]
         assert "-87%" in matched["price"]
+
+
+def test_doctor_respects_browser_mode(monkeypatch):
+    """handle_doctor phai kiem tra Browser (CDP) khi browser_mode=gologin_cdp va Bridge khi extension."""
+    import app
+    parser = app.build_parser()
+
+    monkeypatch.setattr(app, "_check_voicestudio", lambda: (True, "mock vs"))
+    monkeypatch.setattr(app, "_check_llm", lambda: (True, "mock llm"))
+    monkeypatch.setattr(app, "_check_audio_device", lambda: (True, "mock audio"))
+    monkeypatch.setattr(app, "_check_queue", lambda: (True, "mock queue"))
+    monkeypatch.setattr(app, "_check_cdp", lambda port=30899: (True, f"mock cdp {port}"))
+    monkeypatch.setattr(app, "_check_bridge", lambda url, window: (False, "bridge down"))
+
+    # 1. Che do gologin_cdp -> kiem tra CDP, bo qua Bridge -> thanh cong
+    args_cdp = parser.parse_args(["doctor", "--browser-mode", "gologin_cdp"])
+    ret_cdp = app.handle_doctor(args_cdp)
+    assert ret_cdp == 0
+
+    # 2. Che do extension -> kiem tra Bridge -> that bai vi bridge down
+    args_ext = parser.parse_args(["doctor", "--browser-mode", "extension"])
+    ret_ext = app.handle_doctor(args_ext)
+    assert ret_ext == 1

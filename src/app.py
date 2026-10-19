@@ -350,6 +350,19 @@ def _check_bridge(url: str, window: float) -> tuple[bool, str]:
         return False, f"FAIL {url} -> {type(e).__name__}: {e}"
     return True, f"OK {url} events={n} trong {time.monotonic() - t0:.1f}s"
 
+def _check_cdp(port: int = 30899) -> tuple[bool, str]:
+    try:
+        import browser_manager
+        target = browser_manager.get_cdp_target(cdp_port=port)
+        if target:
+            title = str(target.get("title") or "")[:45]
+            url = str(target.get("url") or "")[:60]
+            return True, f"OK kết nối cổng {port} -> '{title}' ({url})"
+        return False, f"FAIL không tìm thấy tab TikTok Shop trên cổng CDP {port}"
+    except Exception as e:
+        return False, f"FAIL CDP {port} -> {type(e).__name__}: {e}"
+
+
 
 def _check_queue() -> tuple[bool, str]:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
@@ -365,14 +378,28 @@ def _check_queue() -> tuple[bool, str]:
 
 def handle_doctor(args) -> int:
     print("[doctor] Auto Voice TikTok Shop — chẩn đoán")
+    mode = getattr(args, "browser_mode", None) or os.getenv("BROWSER_MODE")
+    if not mode:
+        try:
+            import settings
+            mode = settings.load().get("browser_mode", "gologin_cdp")
+        except Exception:
+            mode = "gologin_cdp"
+    cdp_port = getattr(args, "cdp_port", None) or int(os.getenv("CDP_PORT", "30899"))
     checks = [
         ("VoiceStudio", _check_voicestudio()),
         ("LLM", _check_llm()),
         ("Audio output", _check_audio_device()),
-        ("Bridge", _check_bridge(getattr(args, "bridge", DEFAULT_BRIDGE), getattr(args, "window", 2.0))),
+    ]
+    if mode == "gologin_cdp":
+        checks.append(("Browser (CDP)", _check_cdp(cdp_port)))
+    else:
+        checks.append(("Bridge", _check_bridge(getattr(args, "bridge", DEFAULT_BRIDGE), getattr(args, "window", 2.0))))
+
+    checks.extend([
         ("Audio queue", _check_queue()),
         ("Event simulator", (True, f"OK {sum(1 for _ in zip(range(10), iter_events(seed=42)))} event(s) sinh duoc")),
-    ]
+    ])
     failed = []
     for name, (ok, detail) in checks:
         tag = "OK  " if ok else "FAIL"
@@ -417,6 +444,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("--bridge", default=DEFAULT_BRIDGE)
     p_doc.add_argument("--window", type=float, default=2.0, help="Số giây nghe sự kiện từ bridge")
 
+    p_doc.add_argument("--browser-mode", choices=["extension", "gologin_cdp"], default=None, help="Chế độ kết nối trình duyệt")
+    p_doc.add_argument("--cdp-port", type=int, default=None, help="Cổng CDP remote debugging")
     subparsers.add_parser("live", help="Khởi chạy chế độ live")
     subparsers.add_parser("stop", help="Dừng ứng dụng")
     return parser

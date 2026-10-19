@@ -403,21 +403,25 @@ Trả về dict:
 | `index` | thứ tự trong danh sách API (hoặc DOM) |
 | `id` | `product_id` từ API; rỗng ở chế độ DOM dự phòng |
 | `name` | `title` từ API; hoặc dòng text dài đầu tiên trong row DOM |
-| `price` | `format_available_price`; hoặc leaf text dạng `35.000₫` |
-| `is_pinned` | DOM chứa "Lựa chọn yêu thích" (gắn qua tên sản phẩm khi có API) |
+| `price` | `format_available_price` (giá niêm yết giỏ hàng ban đầu) |
+| `is_pinned` | chuẩn xác từ `introduce_id` của API (chỉ tối đa 1 sản phẩm ghim trên live, không nhầm với nhãn "Lựa chọn yêu thích") |
 | `url` | `https://shop.tiktok.com/view/product/<id>` |
 
 **Không gọi AI** ở bước này, và **không reload** tab dashboard — bấm nút giữa live vẫn an toàn.
 
-### 13.2 Nút **📥 Load context-live**
+### 13.2 Nút **📥 Load context-live** — Lấy giá khuyến mại thực tế & mô tả
 
 Thay cho nút *Lưu vào context-live* cũ. Với từng sản phẩm trong bảng:
 
 1. Nhúng PDP vào **iframe ẩn cùng-origin trong tab dashboard** (không mở tab mới —
    tab mới dính trang "Security Check" slide của TikTok), chờ load rồi đọc DOM.
-2. Lấy **tên**, **mô tả sản phẩm**, và **tối đa 10 comment/đánh giá đầu tiên**
+2. **Lấy giá khuyến mại thực tế trên live:** Giá hiển thị trên giỏ hàng ban đầu chỉ là giá niêm yết;
+   khi mở PDP, hệ thống trích xuất **giá khuyến mại thực tế** (`real_price`), **giá gốc** (`origin_price`),
+   và **tỷ lệ giảm giá** (`discount`, ví dụ: giảm -87%). Giá này được cập nhật ngay lên bảng giao diện app.
+3. Lấy **tên**, **mô tả sản phẩm**, và **tối đa 10 comment/đánh giá đầu tiên**
    (nếu trang ít hơn thì lấy hết những gì có, kể cả 0).
-3. Ghi ra `context-live/` với tên file suy ra **từ tên sản phẩm** (slug bỏ dấu).
+4. Ghi ra `context-live/` với tên file suy ra **từ tên sản phẩm** (slug bỏ dấu), ghi rõ giá khuyến mại
+   và hướng dẫn AI tư vấn chuẩn giá sale cho khách.
 
 **Chống trùng:** file chỉ mục `context-live/_index.json` giữ khoá `<id>||<slug>`, giá trị là tên file.
 

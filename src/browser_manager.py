@@ -1223,7 +1223,10 @@ _CDP_PRODUCT_DETAIL_IFRAME_JS = r"""
         setTimeout(() => { if (!done) { done = true; res(false); } }, 15000);
     });
 
-    const out = { id: pid, name: '', url: url, description: '', reviews: [] };
+    const out = {
+        id: pid, name: '', url: url, description: '', reviews: [],
+        real_price: '', origin_price: '', discount: ''
+    };
     try {
         await wait(4000);
         const d = ifr.contentDocument;
@@ -1234,6 +1237,34 @@ _CDP_PRODUCT_DETAIL_IFRAME_JS = r"""
         out.id = (d.location.href.match(/(?:view\/product|pdp)\/(\d{6,})/) || [])[1] || pid;
         const h1 = d.querySelector('h1') || d.querySelector('[class*="H4-Semibold"]');
         out.name = norm(h1 && h1.innerText).slice(0, 400);
+
+        // Trích xuất giá khuyến mại thực tế trên trang chi tiết sản phẩm (PDP)
+        const lt = d.querySelector('span[class*="line-through"], div[class*="line-through"]');
+        if (lt && lt.parentElement) {
+            const par = lt.parentElement;
+            out.origin_price = norm(lt.innerText);
+            for (const el of par.querySelectorAll('*')) {
+                if (el.children.length === 0) {
+                    const txt = norm(el.innerText);
+                    if (txt.includes('%')) {
+                        out.discount = txt;
+                    } else if (el !== lt && !txt.includes('₫') && !txt.includes('đ') && /^[\d.,]+$/.test(txt)) {
+                        out.real_price = txt + '₫';
+                    }
+                }
+            }
+        }
+        if (!out.real_price) {
+            for (const el of d.querySelectorAll('span, div')) {
+                if (el.children.length === 0) {
+                    const t = norm(el.innerText);
+                    if (/^[\d.,]+\s*₫$/.test(t) || /^₫[\d.,]+$/.test(t)) {
+                        out.real_price = t.replace(/^₫/, '') + '₫';
+                        break;
+                    }
+                }
+            }
+        }
 
         // Mô tả: ưu tiên khối ngay sau tiêu đề "Mô tả sản phẩm"
         const hd = [...d.querySelectorAll('div,span,p,h2,h3')]
@@ -1323,7 +1354,7 @@ _CDP_PRODUCTS_JS = r"""
 
         const prices = leaves.filter(isPrice);
         const stock = leaves.find(s => /^Còn:/i.test(s)) || '';
-        const pinned = leaves.some(s => /Lựa chọn yêu thích|Đang ghim/i.test(s));
+        const pinned = leaves.some(s => /^(?:Đang ghim|Đang giới thiệu|Hủy ghim|Hủy giới thiệu)$/i.test(s) || /\b(?:đang ghim|đang giới thiệu)\b/i.test(s));
         const key = name.slice(0, 80);
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1413,7 +1444,10 @@ _CDP_LIVE_PRODUCT_API_JS = r"""
             const j = await r.json();
             const d = j.data || {};
             const items = d.products || d.list || d.items || (Array.isArray(d) ? d : []);
-            if (items && items.length) return items;
+            if (items && items.length) {
+                const introId = String(d.introduce_id || d.just_pinned_introduce_id || '');
+                return { products: items, introduce_id: introId };
+            }
         } catch (e) { /* thu URL ke tiep */ }
     }
     return null;
@@ -1421,11 +1455,11 @@ _CDP_LIVE_PRODUCT_API_JS = r"""
 """
 
 
-def _fetch_products_via_page_api(cdp_port: int = 30899, timeout_s: float = 25.0) -> list[dict]:
+def _fetch_products_via_page_api(cdp_port: int = 30899, timeout_s: float = 25.0) -> dict | list:
     """Gọi lại /live_product/list từ trong tab dashboard bằng URL đã ký sẵn.
 
-    Không reload trang nên không gián đoạn phiên live. Trả list thô có
-    product_id/title/giá, hoặc [] nếu không có URL hoặc chữ ký đã hết hạn.
+    Không reload trang nên không gián đoạn phiên live. Trả dict chứa
+    products và introduce_id (hoặc list thô), hoặc [] nếu lỗi/hết hạn.
     """
     ws, err = _connect_cdp(cdp_port=cdp_port)
     if ws is None:
@@ -1435,13 +1469,13 @@ def _fetch_products_via_page_api(cdp_port: int = 30899, timeout_s: float = 25.0)
     try:
         with ws:
             data = _cdp_eval(ws, _CDP_LIVE_PRODUCT_API_JS, req_id=8990, timeout_s=timeout_s)
-        return data if isinstance(data, list) else []
+        return data if isinstance(data, (dict, list)) else []
     except Exception as e:
         print(f"[browser] Lỗi gọi API giỏ hàng trong trang: {e}")
         return []
 
 
-def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.0) -> list[dict]:
+def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.0) -> dict | list:
     """Bắt response /live_product/list của dashboard qua CDP Network.
 
     API này chỉ chạy được với chữ ký msToken dùng-một-lần do trang tự sinh nên
@@ -1492,11 +1526,11 @@ def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.
                         payload = json.loads(msg.get("result", {}).get("body") or "{}")
                     except Exception:
                         continue
-                    items = ((payload.get("data") or {}).get("products")
-                             or (payload.get("data") or {}).get("list")
-                             or [])
+                    d = payload.get("data") or {}
+                    items = d.get("products") or d.get("list") or []
+                    intro_id = str(d.get("introduce_id") or d.get("just_pinned_introduce_id") or "")
                     if items:
-                        bodies = items
+                        bodies = {"products": items, "introduce_id": intro_id}
                         break
     except Exception as e:
         print(f"[browser] Lỗi harvest live products: {e}")
@@ -1506,27 +1540,34 @@ def _harvest_live_products_network(cdp_port: int = 30899, timeout_s: float = 35.
 def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
     """Đọc danh sách sản phẩm trong giỏ hàng live của dashboard TikTok Shop.
 
-    Nguồn chính là response /live_product/list bắt qua CDP Network (có product_id
-    thật để crawl chi tiết). Nếu chưa bắt được thì quét DOM virtual list làm dự
-    phòng (có số tồn kho nhưng không có id). Trạng thái ghim lấy từ DOM.
+    Nguồn chính: gọi lại /live_product/list ngay trong tab dashboard (nhanh, không reload)
+    hoặc bắt qua CDP Network. Trạng thái ghim chuẩn xác từ introduce_id của API
+    (chỉ có tối đa 1 sản phẩm ghim trên live tại 1 thời điểm).
+    Dự phòng: quét DOM virtual list khi không gọi được API.
     Trả về list dict: index, id, name, price, is_pinned, url, raw.
     """
-    pinned_by_name: dict[str, bool] = {}
-    try:
-        dom = _scan_live_products_dom(cdp_port=cdp_port)
-        for p in dom:
-            pinned_by_name[p.get("name", "")[:60]] = bool(p.get("is_pinned"))
-    except Exception:
-        dom = []
+    raws: list[dict] = []
+    introduce_id = ""
 
     # 1) Goi lai API trong trang (nhanh, KHONG reload -> khong gian doan live)
-    raws = _fetch_products_via_page_api(cdp_port=cdp_port)
+    api_res = _fetch_products_via_page_api(cdp_port=cdp_port)
+    if isinstance(api_res, dict):
+        raws = api_res.get("products") or []
+        introduce_id = str(api_res.get("introduce_id") or "")
+    elif isinstance(api_res, list):
+        raws = api_res
+
     # 2) Du phong: bat response khi trang tu tai lai
     if not raws:
-        raws = _harvest_live_products_network(cdp_port=cdp_port)
+        net_res = _harvest_live_products_network(cdp_port=cdp_port)
+        if isinstance(net_res, dict):
+            raws = net_res.get("products") or []
+            introduce_id = str(net_res.get("introduce_id") or "")
+        elif isinstance(net_res, list):
+            raws = net_res
 
-    products: list[dict] = []
     if raws:
+        products: list[dict] = []
         for i, p in enumerate(raws, 1):
             if not isinstance(p, dict):
                 continue
@@ -1534,24 +1575,27 @@ def fetch_live_products_cdp(cdp_port: int = 30899) -> list[dict]:
             if not name:
                 continue
             pid = str(p.get("product_id") or "")
+            # Trạng thái ghim: chỉ có tối đa 1 sản phẩm ghim trên live (trùng introduce_id)
+            is_pinned = bool(introduce_id and pid and pid == introduce_id)
             products.append({
                 "index": i,
                 "id": pid,
                 "name": name,
                 "price": str(p.get("format_available_price") or ""),
-                "is_pinned": pinned_by_name.get(name[:60], False),
+                "is_pinned": is_pinned,
                 "url": f"https://shop.tiktok.com/view/product/{pid}" if pid else "",
                 "raw": {
                     "api": True,
                     "stock_num": p.get("stock_num"),
                     "origin_price": str(p.get("format_origin_price") or ""),
                     "shop": ((p.get("seller_info") or {}).get("shop_name") or ""),
+                    "introduce_id": introduce_id,
                 },
             })
         return products
 
-    # Dự phòng: DOM (không có id -> nút Load context-live sẽ bỏ qua sản phẩm đó)
-    return dom
+    # 3) Dự phòng: quét DOM (đảm bảo tối đa 1 sản phẩm ghim)
+    return _scan_live_products_dom(cdp_port=cdp_port)
 
 
 def _scan_live_products_dom(cdp_port: int = 30899) -> list[dict]:
@@ -1567,18 +1611,24 @@ def _scan_live_products_dom(cdp_port: int = 30899) -> list[dict]:
         if not isinstance(data, list):
             return []
         out: list[dict] = []
+        pinned_found = False
         for i, p in enumerate(data, 1):
             if not isinstance(p, dict):
                 continue
             name = str(p.get("name") or "").strip()
             if not name:
                 continue
+            is_pin = bool(p.get("is_pinned"))
+            if is_pin and not pinned_found:
+                pinned_found = True
+            else:
+                is_pin = False
             out.append({
                 "index": int(p.get("index") or i),
                 "id": str(p.get("id") or ""),
                 "name": name,
                 "price": str(p.get("price") or ""),
-                "is_pinned": bool(p.get("is_pinned")),
+                "is_pinned": is_pin,
                 "url": str(p.get("url") or ""),
                 "raw": p.get("raw") if isinstance(p.get("raw"), dict) else {},
             })
@@ -1635,12 +1685,19 @@ def crawl_product_detail_cdp(
     if not isinstance(reviews, list):
         reviews = []
     limit = max(0, int(max_reviews))
+    real_price = str(data.get("real_price") or "").strip()
+    origin_price = str(data.get("origin_price") or "").strip()
+    discount = str(data.get("discount") or "").strip()
     return {
         "id": str(data.get("id") or pid),
         "name": str(data.get("name") or ""),
         "url": str(data.get("url") or url),
         "description": str(data.get("description") or ""),
         "reviews": [str(r) for r in reviews[:limit]],
+        "price": real_price,
+        "real_price": real_price,
+        "origin_price": origin_price,
+        "discount": discount,
     }
 
 
@@ -1712,7 +1769,12 @@ def save_product_context(product: dict, live_dir: str | Path | None = None) -> P
         file_path = target_dir / candidate
         index[key] = file_path.name
 
-    price = str(product.get("price") or "Ưu đãi trên live").strip()
+    real_price = str(product.get("real_price") or "").strip()
+    origin_price = str(product.get("origin_price") or "").strip()
+    discount = str(product.get("discount") or "").strip()
+    list_price = str(product.get("price") or "Ưu đãi trên live").strip()
+    effective_price = real_price or list_price
+
     url = str(product.get("url") or "").strip()
     desc = str(product.get("description") or "").strip()
     reviews = product.get("reviews") or []
@@ -1724,8 +1786,22 @@ def save_product_context(product: dict, live_dir: str | Path | None = None) -> P
         "",
         f"- Mã sản phẩm (id): {pid or 'không xác định'}",
         f"- Thứ tự trong giỏ hàng live: {product.get('index', '-')}",
-        f"- Giá ưu đãi: {price}",
     ]
+    if real_price:
+        promo_info = f"- Giá khuyến mại thực tế trên live: {real_price}"
+        details_str = []
+        if origin_price:
+            details_str.append(f"giá gốc {origin_price}")
+        if discount:
+            details_str.append(f"giảm {discount}")
+        if details_str:
+            promo_info += f" ({', '.join(details_str)})"
+        lines.append(promo_info)
+        if list_price and list_price != real_price:
+            lines.append(f"- Giá niêm yết giỏ hàng: {list_price}")
+    else:
+        lines.append(f"- Giá ưu đãi: {list_price}")
+
     if url:
         lines.append(f"- Link sản phẩm: {url}")
     lines += ["", "## Mô tả sản phẩm", "", desc or "(Chưa lấy được mô tả.)", ""]
@@ -1740,7 +1816,16 @@ def save_product_context(product: dict, live_dir: str | Path | None = None) -> P
         "",
         f"- Khách hỏi '{name or pid}' (hoặc mã {product.get('index', '-')}) thì tư vấn theo đúng thông tin trên.",
         "- Dựa vào mô tả và đánh giá thật ở trên để trả lời, không bịa thông tin ngoài file này.",
-        f"- Nhấn mạnh giá ưu đãi {price} chỉ có trên phiên live.",
+    ]
+    if real_price:
+        cta_price = f"- Báo đúng giá khuyến mại thực tế chỉ {real_price}"
+        if discount:
+            cta_price += f" (đang giảm sốc {discount})"
+        cta_price += " chỉ áp dụng khi mua trên phiên live."
+        lines.append(cta_price)
+    else:
+        lines.append(f"- Nhấn mạnh giá ưu đãi {list_price} chỉ có trên phiên live.")
+    lines += [
         "- Nhắc khách bấm giỏ hàng góc trái màn hình để chốt đơn.",
         "",
     ]

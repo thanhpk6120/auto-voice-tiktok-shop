@@ -430,33 +430,55 @@ class App:
         self.nb = ttk.Notebook(root)
         self.nb.pack(side="top", fill="both", expand=True, padx=8, pady=6)
 
-        self.fields: list[_Field] = []
-        for sec in build_form(settings.SECTIONS, self.cfg, settings.SECRET_KEYS):
-            frame = ttk.Frame(self.nb, padding=6)
-            self.nb.add(frame, text=sec["section"])
-            frame.columnconfigure(1, weight=1)
-            for i, spec in enumerate(sec["fields"]):
-                self.fields.append(_Field(self, frame, i, spec))
-
-        # Tab Trang thai
+        # 1. Tab Trang thai (Theo dõi trực tiếp, hàng đợi & thống kê)
         self.tab_status = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_status, text="Trạng thái")
         self._build_status_tab(self.tab_status)
 
-        # Tab San pham Live
+        # 2. Tab San pham Live (Giỏ hàng & Context sản phẩm)
         self.tab_products = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_products, text="Sản phẩm Live")
         self._build_products_tab(self.tab_products)
 
-        # Tab Quan ly Prompt
+        # 3. Tab Quan ly Prompt (Kịch bản thoại chào, bán hàng, chốt đơn)
         self.tab_prompts = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_prompts, text="Quản lý Prompt")
         self._build_prompts_tab(self.tab_prompts)
 
-        # Tab Huong dan Clone Giong
+        # 4. Các tab cấu hình theo thứ tự ưu tiên vận hành:
+        # Trình duyệt -> VoiceStudio TTS -> LLM -> Audio & Analyzer -> Event Bridge -> Khác
+        preferred_sections = [
+            "Trình duyệt / GoLogin",
+            "VoiceStudio TTS",
+            "LLM",
+            "Audio & Analyzer",
+            "Event Bridge",
+        ]
+        config_frames: dict[str, ttk.Frame] = {}
+        self.fields: list[_Field] = []
+        for sec in build_form(settings.SECTIONS, self.cfg, settings.SECRET_KEYS):
+            sec_name = sec["section"]
+            frame = ttk.Frame(self.nb, padding=6)
+            frame.columnconfigure(1, weight=1)
+            for i, spec in enumerate(sec["fields"]):
+                self.fields.append(_Field(self, frame, i, spec))
+            config_frames[sec_name] = frame
+
+        for sec_name in preferred_sections:
+            if sec_name in config_frames:
+                self.nb.add(config_frames[sec_name], text=sec_name)
+
+        for sec_name, frame in config_frames.items():
+            if sec_name not in preferred_sections:
+                self.nb.add(frame, text=sec_name)
+
+        # 5. Tab Huong dan Clone Giong (Tài liệu)
         self.tab_clone_guide = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_clone_guide, text="Hướng dẫn Clone Giọng")
         self._build_clone_guide_tab(self.tab_clone_guide)
+
+        # Mặc định chọn ngay tab Trạng thái đầu tiên
+        self.nb.select(0)
         self._write(f"config: {settings.config_path()}")
         self._write(f"data  : {launcher.app_dir()} | meipass={getattr(sys, '_MEIPASS', '-')}")
         self._write(f"audio : {len(self.devices)} thiết bị ra")
@@ -672,6 +694,7 @@ class App:
                         failed.append(f"{name} (không có link sản phẩm)")
                         continue
                     detail = browser_manager.crawl_product_detail_cdp(url, max_reviews=10)
+                    real_p = detail.get("real_price") or detail.get("price") or ""
                     merged = dict(prod)
                     merged.update({
                         "id": detail.get("id") or prod.get("id") or "",
@@ -679,10 +702,18 @@ class App:
                         "url": detail.get("url") or url,
                         "description": detail.get("description") or "",
                         "reviews": detail.get("reviews") or [],
+                        "real_price": real_p,
+                        "origin_price": detail.get("origin_price") or "",
+                        "discount": detail.get("discount") or "",
                     })
+                    if real_p:
+                        merged["price"] = real_p
+                        prod["price"] = real_p
                     saved = browser_manager.save_product_context(merged)
                     if saved:
                         ok += 1
+                        # Cập nhật ngay giá khuyến mại thực tế lên bảng giao diện
+                        self.root.after(0, lambda p=list(prods): self._update_prod_tree(p))
                     else:
                         failed.append(f"{name} (ghi file lỗi)")
             finally:

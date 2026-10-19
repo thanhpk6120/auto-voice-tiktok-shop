@@ -232,10 +232,15 @@ def test_launch_gologin_profile_applies_profile_json():
 
 
 def test_fetch_live_products_page_api(monkeypatch):
-    """API trong trang (khong reload) an truc -> khong bat Network/DOM."""
-    raw_api = [{"product_id": "1735159097906791637", "title": "SP A",
-                "format_available_price": "35.000\u20ab", "format_origin_price": "40.000\u20ab",
-                "stock_num": 100, "seller_info": {"shop_name": "jojo.vn.official"}}]
+    """API trong trang tra products va introduce_id -> chi goi API, khong goi Network/DOM."""
+    raw_api = {
+        "products": [{
+            "product_id": "1735159097906791637", "title": "SP A",
+            "format_available_price": "35.000\u20ab", "format_origin_price": "40.000\u20ab",
+            "stock_num": 100, "seller_info": {"shop_name": "jojo.vn.official"}
+        }],
+        "introduce_id": "1735159097906791637"
+    }
     calls = []
 
     monkeypatch.setattr(bm, "_fetch_products_via_page_api",
@@ -246,44 +251,79 @@ def test_fetch_live_products_page_api(monkeypatch):
 
     prods = bm.fetch_live_products_cdp()
     assert len(prods) == 1
-    # DOM quet truoc de lay co ghim, roi den API in-page; khong bao gio goi Network
-    assert calls == ["dom", "api"]
+    assert calls == ["api"]
+    assert prods[0]["id"] == "1735159097906791637"
+    assert prods[0]["is_pinned"] is True
+
+
+def test_fetch_live_products_pin_only_exact_match(monkeypatch):
+    """Chi co dung 1 san pham trung introduce_id la is_pinned=True, con lai False."""
+    raw_api = {
+        "products": [
+            {"product_id": "111", "title": "SP 1", "format_available_price": "10.000\u20ab"},
+            {"product_id": "222", "title": "SP 2", "format_available_price": "20.000\u20ab"},
+            {"product_id": "333", "title": "SP 3", "format_available_price": "30.000\u20ab"},
+        ],
+        "introduce_id": "222"
+    }
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: raw_api)
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 3
+    assert prods[0]["is_pinned"] is False
+    assert prods[1]["is_pinned"] is True
+    assert prods[2]["is_pinned"] is False
+
+
+def test_fetch_live_products_no_pin_when_empty_introduce_id(monkeypatch):
+    """Khi introduce_id rong (khong co san pham nao dang ghim tren live) -> tat ca is_pinned=False."""
+    raw_api = {
+        "products": [
+            {"product_id": "111", "title": "SP 1", "format_available_price": "10.000\u20ab"},
+            {"product_id": "222", "title": "SP 2", "format_available_price": "20.000\u20ab"},
+        ],
+        "introduce_id": ""
+    }
+    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: raw_api)
+    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
+    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
+
+    prods = bm.fetch_live_products_cdp()
+    assert len(prods) == 2
+    assert prods[0]["is_pinned"] is False
+    assert prods[1]["is_pinned"] is False
 
 
 def test_fetch_live_products_network_when_page_api_empty(monkeypatch):
-    """API in-page rong (chu ky het han) -> bat response qua Network."""
-    raw_api = [{"product_id": "999", "title": "SP B", "format_available_price": "1.000\u20ab"}]
+    """API in-page rong -> bat response qua Network."""
+    raw_api = {
+        "products": [{"product_id": "999", "title": "SP B", "format_available_price": "1.000\u20ab"}],
+        "introduce_id": "999"
+    }
     monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: [])
     monkeypatch.setattr(bm, "_harvest_live_products_network",
                         lambda cdp_port=30899, timeout_s=35.0: raw_api)
     monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
     prods = bm.fetch_live_products_cdp()
     assert len(prods) == 1 and prods[0]["id"] == "999"
-
-
-def test_fetch_live_products_dom_ping_pin(monkeypatch):
-    """API bat duoc nhung khong chua sp DOM: pin tu DOM gan theo ten."""
-    dom = [{"index": 1, "id": "", "name": "SP A"[:60], "price": "35.000\u20ab",
-            "is_pinned": True, "url": "", "raw": {}}]
-    raw_api = [{"product_id": "999", "title": "SP A"[:60], "format_available_price": "35.000\u20ab"}]
-    monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: raw_api)
-    monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
-    monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
-    prods = bm.fetch_live_products_cdp()
-    assert len(prods) == 1
-    assert prods[0]["id"] == "999"
     assert prods[0]["is_pinned"] is True
 
 
 def test_fetch_live_products_dom_fallback(monkeypatch):
-    """Cai API in-page + Network het han -> dung DOM (khong co id / url)."""
-    dom = [{"index": 1, "id": "", "name": "SP B", "price": "10.000\u20ab",
-            "is_pinned": False, "url": "", "raw": {"stock": "Con: 3"}}]
+    """API in-page + Network deu rong -> fallback sang DOM, toi da 1 sp duoc ghim."""
+    dom = [
+        {"index": 1, "id": "", "name": "SP B", "price": "10.000\u20ab",
+         "is_pinned": True, "url": "", "raw": {"stock": "Con: 3"}},
+        {"index": 2, "id": "", "name": "SP C", "price": "20.000\u20ab",
+         "is_pinned": True, "url": "", "raw": {}}
+    ]
     monkeypatch.setattr(bm, "_fetch_products_via_page_api", lambda cdp_port=30899, timeout_s=25.0: [])
     monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
     monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: dom)
     prods = bm.fetch_live_products_cdp()
-    assert len(prods) == 1
+    assert len(prods) == 2
     assert prods[0]["name"] == "SP B"
     assert prods[0]["id"] == ""
 
@@ -301,9 +341,32 @@ def test_fetch_live_products_no_browser(monkeypatch):
     assert bm._fetch_products_via_page_api() == []
     assert bm._scan_live_products_dom() == []
     assert bm._harvest_live_products_network() == []
-    # fetch: API in-page rong -> se thu Net + DOM cung that bai
     monkeypatch.setattr(bm, "_harvest_live_products_network", lambda cdp_port=30899, timeout_s=35.0: [])
     monkeypatch.setattr(bm, "_scan_live_products_dom", lambda cdp_port=30899: [])
     assert bm.fetch_live_products_cdp() == []
 
 
+def test_save_product_context_notes_real_promotional_price():
+    """save_product_context phai ghi ro gia khuyen mai thuc te va gia goc/giam trong file .md."""
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prod = {
+            "id": "1733809814429206033",
+            "name": "Bim Bim Ga Nuong",
+            "index": 1,
+            "price": "35.000\u20ab",
+            "real_price": "5.396\u20ab",
+            "origin_price": "43.166\u20ab",
+            "discount": "-87%",
+            "url": "https://shop.tiktok.com/view/product/1733809814429206033",
+            "description": "Mo ta bim bim",
+            "reviews": ["Khach 1: Ngon lam"]
+        }
+        saved_file = bm.save_product_context(prod, live_dir=tmp_dir)
+        assert saved_file is not None
+        content = saved_file.read_text(encoding="utf-8")
+        assert "5.396\u20ab" in content
+        assert "Giá khuyến mại thực tế trên live: 5.396\u20ab" in content
+        assert "giá gốc 43.166\u20ab" in content
+        assert "giảm -87%" in content
+        assert "Báo đúng giá khuyến mại thực tế chỉ 5.396\u20ab" in content

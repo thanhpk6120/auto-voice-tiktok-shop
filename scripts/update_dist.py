@@ -9,11 +9,15 @@ websockets...) -> chi can copy lai khi DOI DEPENDENCY, khong can moi lan code
 doi.
 
 KHONG ghi de (du lieu nguoi dung):
-  - prompts/      : GUI ghi prompt thang vao thu muc canh .exe (gui.py)
-  - context-data/ : context mau, user sua tay
-  - context-live/ : context san pham da crawl
   - config.json   : app doc o %APPDATA%; file canh .exe la file mau
   - .env          : secret
+
+Copy them file moi, GIU file cu (khong ghi de):
+  - prompts/      : ban canh .exe THANG ban trong _internal (resolve_path uu
+                    tien _project_root). File user sua qua tab "Quan ly
+                    Prompt" duoc giu nguyen.
+  - context-data/ : context mau, user sua tay
+  - context-live/ : context san pham da crawl
 
 Usage:
   python scripts/update_dist.py "D:\\AutoVoice"              # chi doi code
@@ -78,7 +82,8 @@ def main() -> int:
         print(f"  + {EXE_NAME}  ({_human(exe_src.stat().st_size)})")
         if args.internal:
             print(f"  + {INTERNAL}/  ({_human(_tree_size(DIST / INTERNAL))})")
-        print("  [giu nguyen] prompts/, context-data/, context-live/, config.json, .env")
+        print("  = prompts/, context-data/, context-live/ (them file moi, giu file cu)")
+        print("  [giu nguyen] config.json, .env")
         print("[update] dry-run.")
         return 0
     t0 = time.monotonic()
@@ -103,15 +108,36 @@ def main() -> int:
     if args.internal:
         internal = dst / INTERNAL
         if internal.is_dir():
-            old = dst / f"{INTERNAL}.old"
-            if old.exists():
-                shutil.rmtree(old, ignore_errors=True)
+            # Khong xoa cung (rule: xoa phai vao Recycle Bin) -> doi ten co
+            # timestamp de khong ghi de ban .old cua lan truoc.
+            old = dst / f"{INTERNAL}.old.{int(time.time())}"
             internal.rename(old)
-            print(f"  ~ {INTERNAL}/ -> {INTERNAL}.old (doi ten, xoa sau khi verify)")
+            print(f"  ~ {INTERNAL}/ -> {old.name} (doi ten, xoa sau khi verify)")
         shutil.copytree(DIST / INTERNAL, internal, dirs_exist_ok=True)
         print(f"  + {INTERNAL}/  ({_human(_tree_size(DIST / INTERNAL))})")
 
-    # 4) context-live: giu nguyen du lieu crawl, chi them file moi chua co.
+    # 4) prompts/ + context-data/: ban canh .exe THANG ban trong _internal
+    #    (resolve_path uu tien _project_root()). Copy file moi/chua co - file
+    #    user da sua (GUI ghi prompt thang vao thu muc canh .exe) giu nguyen.
+    for name in ("prompts", "context-data"):
+        src = DIST / name
+        if not src.is_dir():
+            continue
+        target = dst / name
+        target.mkdir(parents=True, exist_ok=True)
+        added = 0
+        for f in src.rglob("*"):
+            if not f.is_file():
+                continue
+            t = target / f.relative_to(src)
+            if t.exists():
+                continue
+            t.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, t)
+            added += 1
+        print(f"  = {name}/ (giu file cu, them {added} file moi)")
+
+    # 5) context-live: giu nguyen du lieu crawl, chi them file moi chua co.
     live_src = DIST / "context-live"
     live_dst = dst / "context-live"
     if live_src.is_dir():

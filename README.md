@@ -253,6 +253,10 @@ Kết quả: `dist/AutoVoiceTikTokShop/AutoVoiceTikTokShop.exe`. Copy **nguyên 
 > `config.json` nằm cạnh `.exe` trong `dist/` là **file mẫu, app không đọc**.
 > App đọc `%APPDATA%\AutoVoiceTikTokShop\config.json` (dùng chung mọi thư mục
 > chạy) — muốn config riêng thì đặt biến môi trường `AUTO_VOICE_CONFIG`.
+>
+> Build lại **không** mất dữ liệu của bạn trong `dist/`: `context-live/`,
+> `config.json`, `.env`, `prompts/`, `context-data/` đều được backup trước và
+> restore sau (prompt bạn sửa qua tab "Quản lý Prompt" vẫn còn).
 
 ```powershell
 # Mở GUI cấu hình (không tham số)
@@ -275,17 +279,19 @@ python scripts/update_dist.py "D:\AutoVoice"
 
 | Lệnh | Copy gì |
 |---|---|
-| `update_dist.py "D:\AutoVoice"` | Chỉ `AutoVoiceTikTokShop.exe` (code nằm trong PYZ của file này) |
+| `update_dist.py "D:\AutoVoice"` | `AutoVoiceTikTokShop.exe` (code nằm trong PYZ của file này) + file mới trong `prompts/`, `context-data/`, `context-live/` |
 | `+ --internal` | Thêm `_internal/` (thư viện runtime) — **chỉ khi đổi dependency** |
 
-Không ghi đè (giữ nguyên dữ liệu của bạn): `prompts/` (GUI ghi prompt thẳng vào
-thư mục cạnh `.exe`), `context-data/`, `context-live/`, `config.json`, `.env`.
+**Không ghi đè** (giữ nguyên dữ liệu của bạn): `config.json`, `.env`, và các file
+bạn đã sửa trong `prompts/` (GUI ghi prompt thẳng vào thư mục cạnh `.exe`),
+`context-data/`, `context-live/`. Bản cạnh `.exe` **thắng** bản trong `_internal/`
+(`resolve_path` ưu tiên thư mục cạnh `.exe`).
 
 > Script sẽ **báo lỗi và không đụng gì** nếu app đang chạy (Windows khoá file
 > `.exe`). Hãy đóng app rồi chạy lại.
 >
-> `--internal` đổi tên `_internal/` cũ thành `_internal.old` (không xoá cứng) —
-> xoá sau khi verify bản mới chạy được.
+> `--internal` đổi tên `_internal/` cũ thành `_internal.old.<timestamp>` (không
+> xoá cứng) — xoá sau khi verify bản mới chạy được.
 
 ### Chạy từ source — copy sang thư mục khác (không cần build lại .exe)
 

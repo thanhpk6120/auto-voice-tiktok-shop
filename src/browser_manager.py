@@ -82,10 +82,18 @@ CDP_SETUP_JS = r"""
 
     const DATE_TIME_RE = /^(\d{1,2}[/.\-]\d{1,2}([/.\-]\d{2,4})?(\s+\d{1,2}(:\d{2})*)?|\d{1,2}:\d{2}(:\d{2})?)$/;
 
+    // Nhan UI "quà tặng" / "hoa hồng" KHONG duoc coi la hint: chi bat cac cum chi
+    // xuat hien trong dong su kien that (co ten khach + dong tu).
+    const GIFT_ORDER_HINT = /(?:đã tặng|vừa tặng|gửi tặng|đã gửi|\bgift\b|đã chốt đơn|vừa chốt đơn|đã đặt hàng|vừa đặt hàng|đã mua|ordered|purchased)/i;
+
     function isJunk(text) {
         if (!text) return true;
         const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length >= 4) return true;
+        // Dong su kien gift/order that tren khung [Hoat dong] thuong nhieu dong
+        // (ten khach / 'da tang' / ten qua / 'x1') -> nguong rac phai cao hon,
+        // neu khong su kien tang qua bi nuot truoc khi kip pushEvent.
+        const looksGiftOrOrder = GIFT_ORDER_HINT.test(text);
+        if (lines.length >= (looksGiftOrOrder ? 12 : 4)) return true;
         const s = text.trim().toLowerCase();
         if (s.length < 2) return true;
         if (DATE_TIME_RE.test(s)) return true;
@@ -101,15 +109,18 @@ CDP_SETUP_JS = r"""
     function pushEvent(type, user, content, source, raw) {
         const now = Date.now();
         const key = type + '|' + (user || '') + '|' + (content || '');
-        // Dọn bớt các mục cũ quá 120 giây khi bộ nhớ lớn
+        // Don bớt các mục cũ quá 120 giây khi bộ nhớ lớn
         if (seenRecent.size > 500) {
             for (const [k, t] of seenRecent.entries()) {
                 if (now - t > 120000) seenRecent.delete(k);
             }
         }
         const lastTime = seenRecent.get(key);
-        // Chống lặp sự kiện cùng loại/user/nội dung trong vòng 120 giây (tránh virtual DOM re-render)
-        if (lastTime && (now - lastTime < 120000)) return;
+        // Chống lặp sự kiện cùng loại/user/nội dung do virtual DOM re-render.
+        // Riêng gift/order phải dùng cửa sổ NGẮN: khách tặng cùng món 2 lần là thật,
+        // cửa sổ 120 giây sẽ nuốt mất lần tặng thứ hai -> không có câu cảm ơn.
+        const dedupeMs = (type === 'gift' || type === 'order') ? 3000 : 120000;
+        if (lastTime && (now - lastTime < dedupeMs)) return;
         seenRecent.set(key, now);
         window.__tiktok_cdp_queue_v2.push({
             type: type,

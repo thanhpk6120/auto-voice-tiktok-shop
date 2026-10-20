@@ -181,6 +181,13 @@ def handle_run(args) -> int:
                         collector.set_max_join_history(int(new_cfg.get("greeting_max_batch", 5)))
                         queue.interrupt_mode = str(new_cfg.get("interrupt_mode", queue.interrupt_mode))
                         queue._dry_run = bool(new_cfg.get("no_play", queue._dry_run))
+                        # Cấu hình mới (có thể đổi analyst_llm_model) -> xoá cache phân loại.
+                        # Cache sống ở tiến trình này, không phải tiến trình GUI.
+                        try:
+                            import intent_router
+                            intent_router.clear_intent_cache()
+                        except Exception:
+                            pass
                         print(f"[config] Đã cập nhật và áp dụng cấu hình mới nhất từ {cfg_path.name}", flush=True)
                 except Exception:
                     pass

@@ -464,6 +464,8 @@ def test_rate_limit_backoff_avoids_immediate_retry():
 
     old_until = ir._rate_limited_until
     try:
+        # Cache phân loại là state dùng chung -> xoá để test này không dùng kết quả cache.
+        ir.clear_intent_cache()
         ir._rate_limited_until = _time.monotonic() + 60.0
         got = ir.classify_intent("alo shop ơi", products=[], model="openrouter/typesafe/jev-router")
         assert got["source"] == "rule"
@@ -471,3 +473,4 @@ def test_rate_limit_backoff_avoids_immediate_retry():
         assert ir.rate_limit_remaining_s() > 0
     finally:
         ir._rate_limited_until = old_until
+        ir.clear_intent_cache()

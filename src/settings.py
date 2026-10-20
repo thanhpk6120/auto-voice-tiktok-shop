@@ -29,13 +29,15 @@ CONFIG_FILE_NAME = "config.json"
 
 DEFAULTS: dict = {
     # LLM (OpenAI-compatible)
-    "llm_base_url": "http://192.168.1.68:20130/v1",
+    "llm_base_url": "http://192.168.1.68:20128/v1",
     "llm_api_key": "",
-    "llm_model": "claude-sonnet-5",
+    "llm_model": "claude-opus-5",
     "llm_timeout_s": 20,
+    # Tat thinking cua model khi server ho tro -> LLM tra loi nhanh hon nhieu.
+    "llm_disable_thinking": True,
     # Model AI chuyên phân tích bình luận/hoạt động để chọn đúng loại prompt.
     # Để trống "" = tắt phân tích bằng AI, dùng luật từ khoá dự phòng.
-    "analyst_llm_model": "openrouter/typesafe/jev-router",
+    "analyst_llm_model": "openrouter/typesafe/jev-1.13",
     "analyst_llm_timeout_s": 12,
     # VoiceStudio TTS
     "voicestudio_url": "http://127.0.0.1:3900",
@@ -80,6 +82,7 @@ SECTIONS: dict = {
         "llm_api_key",
         "llm_model",
         "llm_timeout_s",
+        "llm_disable_thinking",
         "analyst_llm_model",
         "analyst_llm_timeout_s",
     ],
@@ -142,6 +145,7 @@ FIELD_DOCS: dict[str, str] = {
     "llm_timeout_s": "Thời gian chờ tối đa (giây) cho mỗi yêu cầu gọi LLM trước khi tự động fallback.",
     "analyst_llm_model": "Model AI chuyên PHÂN TÍCH bình luận/hoạt động để biết khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, từ đó chọn đúng loại prompt. Ví dụ: openrouter/typesafe/jev-router. Bấm nút 'Tải danh sách model' ở tab Quản lý Prompt để chọn từ danh sách thật của server. Để trống để tắt phân tích bằng AI và dùng luật từ khoá dự phòng.",
     "analyst_llm_timeout_s": "Thời gian chờ tối đa (giây) cho bước phân tích ý định. Nếu quá hạn sẽ tự động dùng luật từ khoá dự phòng.",
+    "llm_disable_thinking": "Tắt chế độ suy luận (thinking) của model LLM khi server hỗ trợ — câu trả lời ra nhanh hơn, chất lượng câu không đổi. Tắt nếu server báo lỗi 400 khi thấy tham số 'thinking'.",
     "voicestudio_url": "Địa chỉ VoiceStudio Local API (mặc định: http://127.0.0.1:3900).",
     "voicestudio_voice": "Giọng đọc. Danh sách lấy trực tiếp từ VoiceStudio: alias OpenAI (alloy, echo...) và các giọng bạn đã clone. Với giọng clone, chọn mục có dạng 'Tên  <voice_id>'.",
     "voicestudio_model": "Model TTS trong VoiceStudio (tts-1 tốc độ nhanh hoặc tts-1-hd chất lượng cao).",
@@ -343,6 +347,7 @@ def apply(cfg: dict | None = None) -> dict:
             _mod.LLM_MODEL = str(cfg["llm_model"])
             _mod.LLM_API_KEY = str(cfg["llm_api_key"])
             _mod.LLM_TIMEOUT_S = float(cfg["llm_timeout_s"])
+            _mod.LLM_DISABLE_THINKING = bool(cfg.get("llm_disable_thinking", True))
             _mod.ANALYST_LLM_MODEL = str(cfg.get("analyst_llm_model", ""))
             _mod.ANALYST_LLM_TIMEOUT_S = float(cfg.get("analyst_llm_timeout_s", 12))
             _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))

@@ -39,15 +39,17 @@ def test_apply_sets_llm_in_both_module_objects():
     cfg["llm_base_url"] = "http://10.1.1.1:1111/v1"
     cfg["llm_model"] = "model-abc"
     cfg["llm_api_key"] = "sk-live-abcdefghijkl"
+    cfg["llm_disable_thinking"] = False
     settings.apply(cfg)
 
     assert srcconfig.LLM_BASE_URL == "http://10.1.1.1:1111/v1"
     assert srcconfig.LLM_MODEL == "model-abc"
     assert srcconfig.LLM_API_KEY == "sk-live-abcdefghijkl"
+    assert srcconfig.LLM_DISABLE_THINKING is False
 
     assert config.LLM_BASE_URL == "http://10.1.1.1:1111/v1"
     assert config.LLM_API_KEY == "sk-live-abcdefghijkl"
-
+    assert config.LLM_DISABLE_THINKING is False
 
 def test_llm_client_reads_config_at_call_time():
     """llm_client.chat() phai doc base url luc goi, khong bind cung luc import."""

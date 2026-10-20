@@ -524,7 +524,11 @@ của đơn hàng/quà tặng.
   `intent_router.last_analyze_error()` và tự động chuyển sang luật dự phòng — không làm dừng phiên live.
 - Gặp `429` thì **tạm hoãn gọi model phân tích 30 giây** (`rate_limit_remaining_s()` cho biết còn bao lâu)
   để không dội thêm request vào server đang giới hạn tần suất. Hết thời gian hoãn sẽ tự thử lại.
-  Đây là backoff nhẹ, không có tầng cache/retry phức tạp.
+- **Cache phân loại ý định**: kết quả model được cache theo khoá `(text, analyst_llm_model)`
+  trong 5 phút (tối đa 500 mục) — bình luận trùng lặp trên live không gọi lại model
+  (lần 2 trả `source="cache"`). Chỉ cache kết quả **từ model**; kết quả luật từ khoá dự phòng
+  không cache (tốn 0ms và có thể cũ sau khi đổi hàng). Khoá có chứa model nên đổi
+  `analyst_llm_model` lúc live sẽ tự gọi lại model, không dùng kết quả của model cũ.
 - Câu hỏi sản phẩm: dò sản phẩm trong **context-live** — nguồn **duy nhất** khi thư mục này
   đã có sản phẩm. `context-data` chỉ được nạp khi `context-live` rỗng (chưa đồng bộ giỏ hàng
   live), nên sản phẩm demo (`sp-01-ao-thun`, `sp-02-kem-duong`, `sp-03-tai-nghe`) không bao giờ

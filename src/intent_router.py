@@ -42,6 +42,30 @@ INTENT_LABELS: dict[str, str] = {
 
 VALID_INTENTS = tuple(INTENT_PROMPTS.keys())
 
+# Cache phan loai intent theo text binh thuong.
+# Comment trung lap rat pho bien tren live ("con hang khong shop?" lap lai nhieu lan)
+# -> goi lai model la ton tai request. Cache theo (text, model) + TTL.
+_CACHE_TTL_S: float = 300.0     # 5 phut: hang trong live hay doi -> phan loai cu theo hang
+_CACHE_MAX: int = 500
+_intent_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _cache_key(text: str, model: str = "") -> str:
+    """Khoa cache: bo khoang trang thua + chuan hoa chu thuong.
+
+    KE include model analyst: app hot-reload config (app.py) doi model ma khong
+    xoa cache (GUI chay process khac) -> khoa theo text don thuan se tra ket qua
+    cua model cu trong toi 300s. Khoa theo (text, model) tu chua lanh.
+    """
+    body = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    return f"{model}\x00{body}"
+
+
+def clear_intent_cache() -> None:
+    """Xoa cache phan loai (goi khi doi model analyst)."""
+    _intent_cache.clear()
+
+
 # Lý do thất bại gần nhất của bước phân tích bằng AI (để chẩn đoán trong log/GUI).
 _LAST_ANALYZE_ERROR: str = ""
 
@@ -108,6 +132,33 @@ Bình luận/Hoạt động cần phân loại:
 """
 
 
+def _is_decision_model(model: str) -> bool:
+    """Model 'decision' (TypeSafe/jev) goi endpoint '/systemone', khong phai chat/completions."""
+    m = str(model or "").lower()
+    return "jev" in m or "decision" in m or "typesafe" in m
+
+
+def _decision_questions() -> dict:
+    """Cau hoi cho decision model: chon 1 nhan intent trong 6 nhan hop le."""
+    return {
+        "intent": {
+            "type": "choice",
+            "instructions": (
+                "Phan loai y dich cua binh luan khach trong livestream ban hang TikTok Shop."
+            ),
+            "options": list(VALID_INTENTS),
+            "criteria": {
+                "greeting": "khach chao shop, goi shop, hoi co ai khong",
+                "product_question": "khach hoi ve san pham: gia, size, con hang, mau, chat lieu, bao hanh, ship",
+                "order": "khach chot don, dat hang, da mua, thanh toan",
+                "gift": "khach tang qua, gui qua, tha tim cho shop",
+                "chat": "tro chuyen xa giao, hoi thoi, cam on",
+                "other": "khong thuoc nhom nao o tren",
+            },
+        }
+    }
+
+
 def classify_intent(
     text: str,
     products: list[dict] | None = None,
@@ -117,7 +168,8 @@ def classify_intent(
     """Phân loại ý định bằng model AI cấu hình (`analyst_llm_model`).
 
     Trả về dict {"intent", "product_hint", "confidence", "source"}.
-    `source` = "llm" hoặc "rule" (khi LLM lỗi/không cấu hình).
+    `source` = "llm" (model trả kết quả), "cache" (lấy lại từ cache phân loại)
+    hoặc "rule" (LLM lỗi/không cấu hình - dùng luật từ khoá).
     """
     global _LAST_ANALYZE_ERROR, _rate_limited_until
 
@@ -133,11 +185,62 @@ def classify_intent(
     if timeout is None:
         timeout = _analyst_timeout()
 
+    # Cache: comment trung lap -> tra ket qua da phan loai, khong goi lai model.
+    # Khoa gom model: doi model analyst (app hot-reload config) -> khoa doi -> goi lai.
+    cache_key = _cache_key(raw, cfg_model or "")
+    hit = _intent_cache.get(cache_key)
+    if hit and (time.monotonic() - hit[0]) < _CACHE_TTL_S:
+        cached = dict(hit[1])
+        cached["source"] = "cache"
+        return cached
+    if hit:
+        _intent_cache.pop(cache_key, None)   # het TTL -> xoa
+
+    def _remember(result: dict) -> dict:
+        """Luu ket qua phan loai vao cache (chi khi dinh danh, khong luu loi)."""
+        # CHI cache ket qua tu model. Ket qua luat tu khoa thi ton tai 0ms (khong
+        # ton request) va co the stale: neu model loi roi hoi phuc, text do van
+        # duoc tra tu cache thay vi goi lai model.
+        if result.get("source") == "llm" and result.get("intent"):
+            if len(_intent_cache) >= _CACHE_MAX:
+                # Bo phan tu cu nhat.
+                oldest = min(_intent_cache.items(), key=lambda kv: kv[1][0])[0]
+                _intent_cache.pop(oldest, None)
+            _intent_cache[cache_key] = (time.monotonic(), {
+                "intent": result["intent"],
+                "product_hint": result.get("product_hint", ""),
+                "confidence": result.get("confidence", 0.5),
+                "source": result.get("source", "rule"),
+            })
+        return result
     # Đang tạm hoãn do lần trước bị 429 -> dùng luật ngay, không dội thêm request
     if cfg_model and _in_rate_limit_cooldown():
         _LAST_ANALYZE_ERROR = (
             f"tạm hoãn gọi model phân tích còn {rate_limit_remaining_s():.0f}s (do bị giới hạn tần suất)"
         )
+        result = classify_intent_rules(raw)
+        result["error"] = _LAST_ANALYZE_ERROR
+        return result
+
+    if cfg_model and _is_decision_model(cfg_model):
+        # Decision model (TypeSafe/jev): goi endpoint '/systemone', khong phai chat/completions.
+        try:
+            import llm_client
+            answers = llm_client.decide(
+                cfg_model, raw[:600], _decision_questions(), timeout=timeout)
+            ans = answers.get("intent") or {}
+            intent = str(ans.get("choice") or "").strip().lower()
+            if intent in VALID_INTENTS:
+                return _remember({
+                    "intent": intent,
+                    "product_hint": "",
+                    "confidence": _to_float(ans.get("confidence"), 0.8),
+                    "source": "llm",
+                })
+            _LAST_ANALYZE_ERROR = f"decision model tra intent khong hop le: {intent!r}"
+        except Exception as e:
+            _LAST_ANALYZE_ERROR = f"{type(e).__name__}: {e}"
+        # Decision model khong dung duoc voi /chat/completions -> luật từ khoá.
         result = classify_intent_rules(raw)
         result["error"] = _LAST_ANALYZE_ERROR
         return result
@@ -170,12 +273,12 @@ def classify_intent(
             if intent not in VALID_INTENTS:
                 intent = ""
             if intent:
-                return {
+                return _remember({
                     "intent": intent,
                     "product_hint": str(data.get("product_hint") or "").strip(),
                     "confidence": _to_float(data.get("confidence"), 0.8),
                     "source": "llm",
-                }
+                })
             _LAST_ANALYZE_ERROR = f"model trả về intent không hợp lệ: {data.get('intent')!r}"
         except Exception as e:
             _LAST_ANALYZE_ERROR = f"{type(e).__name__}: {e}"
@@ -183,6 +286,7 @@ def classify_intent(
             if "429" in str(e) or "rate" in type(e).__name__.lower():
                 _rate_limited_until = time.monotonic() + _RATE_LIMIT_COOLDOWN_S
 
+    # Fallback luat tu khoa: khong cache (ton 0ms, va co the stale neu hang doi).
     result = classify_intent_rules(raw)
     result["error"] = _LAST_ANALYZE_ERROR
     return result

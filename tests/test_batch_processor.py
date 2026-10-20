@@ -155,7 +155,15 @@ def test_greeting_prompt_has_no_product_context(monkeypatch):
     ctx_str, nên một câu "Alo" bị LLM đọc thành lời chào kèm quảng cáo kem dưỡng ẩm.
     """
     import batch_processor as bp
-
+    # Isolate phrase cache de khong doc nham lich su phat that tren may
+    cache_dir = ROOT / "local_cache" / "_tmp_test_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for p in cache_dir.glob("*.json"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    monkeypatch.setenv("PHRASE_CACHE_DIR", str(cache_dir))
     seen_prompts: list[str] = []
 
     def fake_chat(system, user, model=None, timeout=None):

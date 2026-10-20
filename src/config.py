@@ -33,11 +33,13 @@ def _load_dotenv():
 
 _load_dotenv()
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://192.168.1.68:20130/v1").rstrip("/")
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-5")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://192.168.1.68:20128/v1").rstrip("/")
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-opus-5")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "20"))
-ANALYST_LLM_MODEL = os.getenv("ANALYST_LLM_MODEL", "openrouter/typesafe/jev-router")
+# Tat thinking cua model (server ho tro "thinking": {"type": "disabled"}).
+LLM_DISABLE_THINKING = os.getenv("LLM_DISABLE_THINKING", "1").strip().lower() not in ("0", "false", "no", "off")
+ANALYST_LLM_MODEL = os.getenv("ANALYST_LLM_MODEL", "openrouter/typesafe/jev-1.13")
 ANALYST_LLM_TIMEOUT_S = float(os.getenv("ANALYST_LLM_TIMEOUT_S", "12"))
 PROMPTS_DIR = os.getenv("PROMPTS_DIR", "prompts")
 CONTEXT_DIR = os.getenv("CONTEXT_DIR", "context-data")

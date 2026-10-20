@@ -1100,6 +1100,8 @@ class App:
         try:
             settings.save(self.cfg)
             settings.apply(self.cfg)
+            # Lưu ý: cache phân loại nằm ở tiến trình app (tiến trình con), không
+            # phải GUI -> app tự xoá khi hot-reload cấu hình (xem app.py).
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không lưu được cấu hình: {e}")
             return

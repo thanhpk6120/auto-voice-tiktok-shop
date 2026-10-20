@@ -3,8 +3,8 @@
 Dung khi chay app tu SOURCE (python src/gui.py) va ban muon "day" ban cap nhat
 vao mot thu muc khac de chay - khong can build lai PyInstaller.
 
-KHONG dung khi chay .exe: code .py da duoc PyInstaller dong goi vao
-base_library.zip nen sua code deu phai build lai (scripts/build_exe.py).
+KHONG dung khi chay .exe: code app duoc PyInstaller dong goi vao PYZ (archive
+nhung trong file .exe) nen sua code deu phai build lai (scripts/build_exe.py).
 
 Usage:
   python scripts/deploy.py <thu-muc-dich> [--dry-run]
@@ -18,26 +18,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Thu muc can copy sang thu muc dich.
+# Thu muc copy - code va du lieu MAU, ghi de moi lan deploy:
 # - src/        : code app (bat buoc)
 # - prompts/    : prompt sinh cau thoai (bat buoc)
-# - context-data/: context mau (fallback khi context-live rong)
-# - ui/         : index.html test tay
 # - extension/  : Chrome Extension (che do nhan su kien qua extension)
-# - data/       : sample-events.jsonl (test)
-# KHONG copy: gologin-basic-offline (2.4GB), vendor (1.9GB), local_cache, out, logs
-ITEMS = ("src", "prompts", "context-data", "ui", "extension", "data")
+ITEMS = ("src", "prompts", "extension")
 
 # File don le can copy.
 FILES = (".env", "requirements.txt", ".env.example")
 
-# context-live: du lieu da crawl cua nguoi dung -> KHONG BAO GIO ghi de.
-# Chi copy khi thu muc dich chua co (lan deploy dau tien).
-CONTEXT_LIVE = "context-live"
+# Thu muc du lieu nguoi dung -> KHONG BAO GIO ghi de. Chi copy lan dau khi
+# thu muc dich con trong.
+# - context-live/ : context san pham da crawl (theo tung may)
+# - context-data/ : context mau, user co the sua tay
+USER_DATA_DIRS = ("context-live", "context-data")
 
 # File .py o dich bi thua (da xoa o source) -> chuyen vao _obsolete/ de khong
 # import nham. KHONG xoa cung (rule: xoa phai vao Recycle Bin).
 OBSOLETE_DIR = "_obsolete"
+
+# GoLogin: 2.4GB, KHONG copy. App can no o che do browser_mode=gologin_cdp
+# (gia tri DEFAULT). Neu thu muc dich thieu, app bao loi kho hieu.
+GOLOGIN_DIR = "gologin-basic-offline"
 
 
 def _copy_dir(src: Path, dst: Path, dry: bool) -> str:
@@ -68,6 +70,20 @@ def _quarantine_stale_py(src: Path, dst: Path, dry: bool) -> int:
     return len(stale)
 
 
+def _check_gologin(dst_root: Path) -> list[str]:
+    """Canh bao neu thu muc dich thieu GoLogin (bat buoc cho browser_mode=gologin_cdp)."""
+    if (dst_root / GOLOGIN_DIR).is_dir():
+        return []
+    return [
+        f"[deploy] CANH BAO: '{GOLOGIN_DIR}' khong co trong thu muc dich.",
+        f"[deploy]   App mac dinh browser_mode=gologin_cdp -> can GoLogin de mo profile.",
+        f"[deploy]   Chon 1 trong 2:",
+        f"[deploy]     1) GUI tab 'Trinh duyet / GoLogin' -> dat gologin_dir tro toi ban san co",
+        f"[deploy]     2) Copy {GOLOGIN_DIR} (2.4 GB) mot lan sang thu muc dich",
+        f"[deploy]   Hoac doi browser_mode sang 'extension' (can extension/ + bridge).",
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Copy app sang thu muc chay khac")
     ap.add_argument("target", help="thu muc dich")
@@ -79,21 +95,24 @@ def main() -> int:
 
     print(f"[deploy] nguon   : {ROOT}")
     print(f"[deploy] dich   : {dst_root}")
+    if not str(dst_root).startswith(str(ROOT)):
+        print("[deploy] luu y: thu muc dich NAM NGOAI workspace ban goc.")
     print("[deploy] se copy:")
     for name in ITEMS:
         line = _copy_dir(ROOT / name, dst_root / name, args.dry_run)
         if line:
             print(line)
 
-    # context-live: du lieu crawl cua nguoi dung -> giu nguyen, chi copy lan dau.
-    live_src = ROOT / CONTEXT_LIVE
-    live_dst = dst_root / CONTEXT_LIVE
-    if live_dst.exists() and any(live_dst.iterdir()):
-        print(f"  {CONTEXT_LIVE}/  (GIU NGUYEN - da co du lieu crawl o dich)")
-    else:
-        line = _copy_dir(live_src, live_dst, args.dry_run)
-        if line:
-            print(line + "  (lan dau - thu muc dich chua co)")
+    # Du lieu nguoi dung -> giu nguyen, chi copy lan dau khi dich con trong.
+    for name in USER_DATA_DIRS:
+        src = ROOT / name
+        dst = dst_root / name
+        if dst.exists() and any(dst.iterdir()):
+            print(f"  {name}/  (GIU NGUYEN - da co du lieu o dich)")
+        else:
+            line = _copy_dir(src, dst, args.dry_run)
+            if line:
+                print(line + "  (lan dau - thu muc dich chua co)")
 
     for name in FILES:
         src = ROOT / name
@@ -113,11 +132,15 @@ def main() -> int:
         print("[deploy] dry-run, khong thay doi gi.")
         return 0
 
+    for line in _check_gologin(dst_root):
+        print(line)
+
     print("\n[deploy] xong. Chay:")
     print(f'  cd "{dst_root}"')
     print("  python src/gui.py")
     print("\n[deploy] luu y: config.json nam o %APPDATA%\\AutoVoiceTikTokShop\\config.json")
-    print("[deploy] (dung chung may) - muon config rieng dat AUTO_VOICE_CONFIG.")
+    print("[deploy] (dung chung cho moi thu muc chay). Muon config rieng:")
+    print(f'[deploy]   set AUTO_VOICE_CONFIG="{dst_root}\\config.json"')
     return 0
 
 

@@ -238,6 +238,22 @@ python scripts/build_exe.py
 Kết quả: `dist/AutoVoiceTikTokShop/AutoVoiceTikTokShop.exe`. Copy **nguyên thư mục**
 `dist/AutoVoiceTikTokShop/` sang máy khác là chạy được (máy đích: Windows 10/11 x64).
 
+> **Không `Copy-Item -Recurse -Force` đè lên thư mục cũ.** Lệnh đó **merge** — file
+> `.pyd`/module của build cũ sót lại trong `_internal/` và gây lỗi import khó hiểu.
+> Đổi tên thư mục cũ trước rồi copy mới:
+>
+> ```powershell
+> Rename-Item "D:\AutoVoice" "AutoVoice.old"   # xoá sau khi verify chạy được
+> Copy-Item "dist\AutoVoiceTikTokShop" "D:\AutoVoice" -Recurse
+> ```
+>
+> Code app được PyInstaller đóng gói vào **PYZ (archive nhúng trong file `.exe`)**,
+> nên sửa `.py` không có tác dụng với `.exe` cũ — phải build lại.
+>
+> `config.json` nằm cạnh `.exe` trong `dist/` là **file mẫu, app không đọc**.
+> App đọc `%APPDATA%\AutoVoiceTikTokShop\config.json` (dùng chung mọi thư mục
+> chạy) — muốn config riêng thì đặt biến môi trường `AUTO_VOICE_CONFIG`.
+
 ```powershell
 # Mở GUI cấu hình (không tham số)
 dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe
@@ -247,6 +263,29 @@ dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe doctor
 dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe run
 dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe simulate --no-play
 ```
+
+### Chạy từ source — copy sang thư mục khác (không cần build lại .exe)
+
+```powershell
+python scripts/deploy.py "D:\AutoVoice"
+cd D:\AutoVoice
+python src/gui.py
+```
+
+Script copy `src/`, `prompts/`, `extension/`, `.env`, `requirements.txt`.
+
+| Thư mục | Xử lý khi deploy |
+|---|---|
+| `src/`, `prompts/`, `extension/` | Ghi đè (code + prompt + extension) |
+| `context-live/` | **Giữ nguyên** — context sản phẩm đã crawl, chỉ copy lần đầu khi thư mục đích còn trống |
+| `context-data/` | **Giữ nguyên** nếu thư mục đích đã có (context mẫu, có thể sửa tay) |
+| `gologin-basic-offline/` (2.4 GB) | **Không copy** — script sẽ cảnh báo nếu thiếu. Trỏ `gologin_dir` trong GUI sang bản sẵn có, hoặc copy một lần |
+| `vendor/` (1.9 GB) | Không copy |
+| `local_cache/`, `out/`, `logs/` | Sinh ra lúc chạy, không copy |
+
+> `config.json` luôn nằm ở `%APPDATA%\AutoVoiceTikTokShop\config.json` — **dùng
+> chung cho mọi thư mục chạy**. Muốn 2 bản độc lập thì đặt biến môi trường
+> `AUTO_VOICE_CONFIG` riêng cho từng bản (biến môi trường, không phải file cạnh app).
 
 ### Cấu hình kết nối (GUI hoặc file JSON)
 

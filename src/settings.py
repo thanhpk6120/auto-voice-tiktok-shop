@@ -3,13 +3,17 @@
 Thu tu uu tien khi lay gia tri (thap -> cao):
   1. DEFAULTS trong file nay
   2. File config JSON (AUTO_VOICE_CONFIG env hoac %APPDATA%/AutoVoiceTikTokShop/config.json)
-  3. File .env (canh .exe hoac goc repo) - chi dung cho secrets va dev override
-  4. Bien moi truong (os.environ) - dat trong process nen thang cao nhat
+  3. File .env (canh .exe hoac goc repo) - CHI secret (llm_api_key)
+
+  .env chi thang cho secret: neu no thang cao hon config.json cho TAT CA key,
+  moi thay doi trong GUI se bi .env che ngay -> vo hieu.
+  KHONG doc os.environ trong load(): apply() ghi gia tri vao os.environ cho module
+  doc env, neu load() cung doc env thi vong lap gia tri cu se thang file config.
+  Muon tro sang file config khac: dat bien moi truong AUTO_VOICE_CONFIG.
 
 API:
   config_path() -> Path          duong dan file config dang dung
-  load() -> dict                 doc config (da merge defaults + json + .env + env)
-  save(cfg) -> Path              ghi config ra dia, tra ve duong dan
+  load() -> dict                 doc config (da merge defaults + json + .env secret)
   get() -> dict                  ban sao config da cache trong process
   apply(cfg=None) -> dict        ap cau hinh vao cac module runtime (tts_client, event_bridge, os.environ)
   reset() -> dict                xoa cache, doc lai tu dia
@@ -267,10 +271,15 @@ def _coerce(key: str, raw: str):
     return raw
 
 
-def _overrides_from(source: dict[str, str]) -> dict:
-    """Lay cac key co trong `source` (ten UPPER) roi chuyen kieu theo DEFAULTS."""
+def _overrides_from(source: dict[str, str], only: set[str] | None = None) -> dict:
+    """Lay cac key co trong `source` (ten UPPER) roi chuyen kieu theo DEFAULTS.
+
+    `only` = chi lay cac key nay (vd SECRET_KEYS). None = lay tat ca.
+    """
     out: dict = {}
     for key in DEFAULTS:
+        if only is not None and key not in only:
+            continue
         env_val = source.get(key.upper())
         if env_val is None or env_val == "":
             continue
@@ -283,16 +292,21 @@ def _env_overrides() -> dict:
     return _overrides_from(dict(os.environ))
 
 
-def _dotenv_overrides() -> dict:
-    """File .env -> override (thap hon os.environ, cao hon config.json)."""
+def _dotenv_overrides(only: set[str] | None = None) -> dict:
+    """File .env -> override.
+
+    Mac dinh CHI lay secret (llm_api_key): .env ton tai de giu key khoi %APPDATA%
+    va de chinh nhanh tay. Neu .env thang cao hon config.json cho TAT CA key,
+    moi thay doi trong GUI se bi .env che ngay lap tuc -> vo hieu.
+    """
     path = _dotenv_path()
     if path is None:
         return {}
-    return _overrides_from(_parse_env_file(path))
+    return _overrides_from(_parse_env_file(path), only if only is not None else SECRET_KEYS)
 
 
 def load(use_cache: bool = False) -> dict:
-    """Doc config, merge DEFAULTS -> config.json -> .env.
+    """Doc config, merge DEFAULTS -> config.json -> .env (secret).
 
     Khong nem loi neu file hong.
 
@@ -307,7 +321,7 @@ def load(use_cache: bool = False) -> dict:
 
     cfg = dict(DEFAULTS)
 
-    # 1) File config JSON (GUI ghi, user sua tay).
+    # 1) File config JSON (GUI ghi, user sua tay) - thang .env cho key thuong.
     path = config_path()
     if path.is_file():
         try:
@@ -318,8 +332,10 @@ def load(use_cache: bool = False) -> dict:
         except Exception as e:  # file hong / khong doc duoc -> dung tiep
             print(f"[settings] không đọc được {path}: {e}", file=sys.stderr)
 
-    # 2) File .env (secrets + dev override) - cao nhat.
-    cfg.update(_dotenv_overrides())
+    # 2) File .env - CHI secret (llm_api_key). Secret thuong o file rieng de
+    # khong lo key vao %APPDATA%; cac key khac do GUI/config.json quyet dinh.
+    # Dat sau config.json de secret trong .env thang ban cu trong config.json.
+    cfg.update(_dotenv_overrides(SECRET_KEYS))
 
     _cache = dict(cfg)
     return dict(cfg)
@@ -335,10 +351,10 @@ def save(cfg: dict) -> Path:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(clean, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
-    # Cache phai phan anh thu tu uu tien sau khi ghi: DEFAULTS -> file -> .env
+    # Cache phai phan anh thu tu uu tien sau khi ghi: DEFAULTS -> file -> .env(secret)
     cached = dict(DEFAULTS)
     cached.update(clean)
-    cached.update(_dotenv_overrides())
+    cached.update(_dotenv_overrides(SECRET_KEYS))
     _cache = cached
     return path
 

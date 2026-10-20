@@ -269,17 +269,19 @@ Config lưu ở `%APPDATA%\AutoVoiceTikTokShop\config.json` (không ghi vào th�
 chạy được cả khi đặt trong `Program Files`). Ghi đè bằng biến môi trường
 `AUTO_VOICE_CONFIG=<duong dan json>` khi cần nhiều profile.
 
-**Thứ tự ưu tiên: `.env` → file JSON → DEFAULTS.**
+**Thứ tự ưu tiên: `config.json` → `.env` (chỉ secret) → DEFAULTS.**
 
 | Nguồn | Vai trò |
 |---|---|
 | `DEFAULTS` trong `src/settings.py` | Giá trị mặc định khi chưa cấu hình gì |
-| `config.json` (%APPDATA%) | Nơi **GUI lưu** cấu hình, sửa tay cũng được |
-| `.env` (cạnh `.exe` hoặc gốc repo) | **Override cao nhất** — dành cho secrets (API key) và chỉnh nhanh tay |
+| `config.json` (%APPDATA%) | Nơi **GUI lưu** cấu hình, sửa tay cũng được — **thắng `.env`** cho mọi key thường |
+| `.env` (cạnh `.exe` hoặc gốc repo) | Chỉ dùng cho **secret** (`llm_api_key`) — giữ key khỏi `%APPDATA%` |
 
-`.env` dùng tên key viết HOA (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`,
-`ANALYST_LLM_MODEL`…). Xem `.env.example` làm mẫu.
+`.env` dùng tên key viết HOA (`LLM_API_KEY`…). Xem `.env.example` làm mẫu.
 
+> `.env` **chỉ** thắng cho secret. Nếu nó thắng cho mọi key, mỗi lần bấm "Lưu cấu
+ hình" trong GUI sẽ bị `.env` che ngay → thay đổi không có hiệu lực.
+>
 > `os.environ` **không** được đọc khi nạp config — `settings.apply()` ghi giá trị
 > cuối cùng vào `os.environ` cho các module đọc env, nếu đọc ngược lại thì vòng lặp
 > giá trị cũ sẽ ghi đè cấu hình bạn vừa sửa trong GUI.

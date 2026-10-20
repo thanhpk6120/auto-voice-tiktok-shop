@@ -1,16 +1,17 @@
 """Cau hinh tap trung cho app (doc/ghi JSON, ap dung runtime vao cac module).
 
-Thu tu uu tien khi lay gia tri:
-  1. File config JSON (AUTO_VOICE_CONFIG env hoac %APPDATA%/AutoVoiceTikTokShop/config.json)
-  2. Bien moi truong (.env / os.environ) - chi khi config file khong co key do
-  3. DEFAULTS
+Thu tu uu tien khi lay gia tri (thap -> cao):
+  1. DEFAULTS trong file nay
+  2. File config JSON (AUTO_VOICE_CONFIG env hoac %APPDATA%/AutoVoiceTikTokShop/config.json)
+  3. File .env (canh .exe hoac goc repo) - chi dung cho secrets va dev override
+  4. Bien moi truong (os.environ) - dat trong process nen thang cao nhat
 
 API:
   config_path() -> Path          duong dan file config dang dung
-  load() -> dict                 doc config (da merge defaults + env)
+  load() -> dict                 doc config (da merge defaults + json + .env + env)
   save(cfg) -> Path              ghi config ra dia, tra ve duong dan
   get() -> dict                  ban sao config da cache trong process
-  apply(cfg=None) -> dict        ap cau hinh vao cac module runtime (tts_client, event_bridge, config)
+  apply(cfg=None) -> dict        ap cau hinh vao cac module runtime (tts_client, event_bridge, os.environ)
   reset() -> dict                xoa cache, doc lai tu dia
 
 Config luu o %APPDATA% (khong phai thu muc app) de app chay duoc tren may khac,
@@ -18,7 +19,6 @@ ke ca khi dat trong Program Files (khong ghi duoc).
 """
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import sys
@@ -225,46 +225,101 @@ def config_path() -> Path:
     return Path.home() / f".{APP_DIR_NAME.lower()}" / CONFIG_FILE_NAME
 
 
-def _env_overrides() -> dict:
-    """Doc bien moi truong theo ten key (vd LLM_BASE_URL -> llm_base_url)."""
-    out = {}
-    for key in DEFAULTS:
-        env_val = os.getenv(key.upper())
-        if env_val is None or env_val == "":
-            continue
-        default = DEFAULTS[key]
-        try:
-            if isinstance(default, bool):
-                out[key] = env_val.strip().lower() in ("1", "true", "yes", "on")
-            elif isinstance(default, int) and not isinstance(default, bool):
-                out[key] = int(float(env_val))
-            elif isinstance(default, float):
-                out[key] = float(env_val)
-            else:
-                out[key] = env_val
-        except (TypeError, ValueError):
-            continue
+def _dotenv_path() -> Path | None:
+    """File .env canh .exe truoc (frozen), roi goc repo khi chay source."""
+    cands: list[Path] = []
+    if getattr(sys, "frozen", False):
+        cands.append(Path(sys.executable).resolve().parent / ".env")
+    cands.append(Path(__file__).resolve().parent.parent / ".env")
+    return next((p for p in cands if p.is_file()), None)
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Parse file .env (KEY=VALUE moi dong) -> dict. Khong nem loi."""
+    out: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip("'\"")
+            if k:
+                out[k] = v
+    except Exception:
+        pass
     return out
 
 
+def _coerce(key: str, raw: str):
+    """Chuyen gia tri chuoi (tu .env / os.environ) sang dung kieu cua DEFAULTS."""
+    default = DEFAULTS.get(key)
+    try:
+        if isinstance(default, bool):
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        if isinstance(default, int) and not isinstance(default, bool):
+            return int(float(raw))
+        if isinstance(default, float):
+            return float(raw)
+    except (TypeError, ValueError):
+        return raw
+    return raw
+
+
+def _overrides_from(source: dict[str, str]) -> dict:
+    """Lay cac key co trong `source` (ten UPPER) roi chuyen kieu theo DEFAULTS."""
+    out: dict = {}
+    for key in DEFAULTS:
+        env_val = source.get(key.upper())
+        if env_val is None or env_val == "":
+            continue
+        out[key] = _coerce(key, env_val)
+    return out
+
+
+def _env_overrides() -> dict:
+    """Bien moi truong (os.environ) -> override. Dat trong process nen thang cao nhat."""
+    return _overrides_from(dict(os.environ))
+
+
+def _dotenv_overrides() -> dict:
+    """File .env -> override (thap hon os.environ, cao hon config.json)."""
+    path = _dotenv_path()
+    if path is None:
+        return {}
+    return _overrides_from(_parse_env_file(path))
+
+
 def load(use_cache: bool = False) -> dict:
-    """Doc config tu file, merge DEFAULTS + env. Khong nem loi neu file hong."""
+    """Doc config, merge DEFAULTS -> config.json -> .env.
+
+    Khong nem loi neu file hong.
+
+    KHONG doc os.environ: settings.apply() ghi gia tri vao os.environ cho module
+    doc env, neu load() cung doc env thi vong lap gia tri cu se thang file config
+    (doi config trong GUI khong co hieu luc). Bien moi truong chi dung qua
+    AUTO_VOICE_CONFIG de tro sang file config khac.
+    """
     global _cache
     if use_cache and _cache is not None:
         return dict(_cache)
 
     cfg = dict(DEFAULTS)
-    cfg.update(_env_overrides())
 
+    # 1) File config JSON (GUI ghi, user sua tay).
     path = config_path()
     if path.is_file():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                cfg.update({k: v for k, v in data.items() if v is not None})
-        except Exception as e:  # file hong / khong doc duoc -> dung defaults
+                cfg.update({k: v for k, v in data.items() if v is not None and k in DEFAULTS})
+        except Exception as e:  # file hong / khong doc duoc -> dung tiep
             print(f"[settings] không đọc được {path}: {e}", file=sys.stderr)
+
+    # 2) File .env (secrets + dev override) - cao nhat.
+    cfg.update(_dotenv_overrides())
 
     _cache = dict(cfg)
     return dict(cfg)
@@ -280,10 +335,12 @@ def save(cfg: dict) -> Path:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(clean, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
-    _cache = dict(DEFAULTS)
-    _cache.update(clean)
+    # Cache phai phan anh thu tu uu tien sau khi ghi: DEFAULTS -> file -> .env
+    cached = dict(DEFAULTS)
+    cached.update(clean)
+    cached.update(_dotenv_overrides())
+    _cache = cached
     return path
-
 
 def get() -> dict:
     return load(use_cache=True)
@@ -338,32 +395,28 @@ def apply(cfg: dict | None = None) -> dict:
     except Exception:
         pass
 
-    # llm config: llm_client doc `src.config`, app.py co the import `config`.
-    # Hai ten nay la hai module object khac nhau -> phai set CA HAI.
-    for _name in ("src.config", "config"):
-        try:
-            _mod = importlib.import_module(_name)
-            _mod.LLM_BASE_URL = str(cfg["llm_base_url"]).rstrip("/")
-            _mod.LLM_MODEL = str(cfg["llm_model"])
-            _mod.LLM_API_KEY = str(cfg["llm_api_key"])
-            _mod.LLM_TIMEOUT_S = float(cfg["llm_timeout_s"])
-            _mod.LLM_DISABLE_THINKING = bool(cfg.get("llm_disable_thinking", True))
-            _mod.ANALYST_LLM_MODEL = str(cfg.get("analyst_llm_model", ""))
-            _mod.ANALYST_LLM_TIMEOUT_S = float(cfg.get("analyst_llm_timeout_s", 12))
-            _mod.PROMPTS_DIR = str(cfg.get("prompts_dir", "prompts"))
-            _mod.CONTEXT_DIR = str(cfg.get("context_dir", "context-data"))
-            _mod.CONTEXT_LIVE_DIR = str(cfg.get("context_live_dir", "context-live"))
-            _mod.BATCH_WINDOW_S = float(cfg.get("batch_window_s", 3.0))
-            _mod.BATCH_MAX_EVENTS = int(cfg.get("batch_max_events", 10))
-            _mod.GREETING_COOLDOWN_S = float(cfg.get("greeting_cooldown_s", 3.0))
-            _mod.GREETING_USER_COOLDOWN_S = float(cfg.get("greeting_user_cooldown_s", 180.0))
-            _mod.SALES_MAX_WORDS = int(cfg.get("sales_max_words", 75))
-            _mod.REMIND_ENABLED = bool(cfg.get("remind_enabled", True))
-            _mod.REMIND_MIN_S = float(cfg.get("remind_min_s", 60.0))
-            _mod.REMIND_MAX_S = float(cfg.get("remind_max_s", 120.0))
-            _mod.REMIND_TEXT = str(cfg.get("remind_text", ""))
-        except Exception:
-            pass
+    # LLM: gia tri cuoi cung -> os.environ (llm_client doc settings.get() truc tiep,
+    # env chi de module khac doc, va de process con (app) co cung gia tri).
+    os.environ["LLM_BASE_URL"] = str(cfg["llm_base_url"]).rstrip("/")
+    os.environ["LLM_MODEL"] = str(cfg["llm_model"])
+    os.environ["LLM_API_KEY"] = str(cfg["llm_api_key"])
+    os.environ["LLM_TIMEOUT_S"] = str(float(cfg["llm_timeout_s"]))
+    os.environ["LLM_DISABLE_THINKING"] = "1" if cfg.get("llm_disable_thinking", True) else "0"
+    os.environ["ANALYST_LLM_MODEL"] = str(cfg.get("analyst_llm_model", ""))
+    os.environ["ANALYST_LLM_TIMEOUT_S"] = str(float(cfg.get("analyst_llm_timeout_s", 12)))
+    os.environ["PROMPTS_DIR"] = str(cfg.get("prompts_dir", "prompts"))
+    os.environ["CONTEXT_DIR"] = str(cfg.get("context_dir", "context-data"))
+    os.environ["CONTEXT_LIVE_DIR"] = str(cfg.get("context_live_dir", "context-live"))
+    os.environ["BATCH_WINDOW_S"] = str(float(cfg.get("batch_window_s", 3.0)))
+    os.environ["BATCH_MAX_EVENTS"] = str(int(cfg.get("batch_max_events", 10)))
+    os.environ["GREETING_COOLDOWN_S"] = str(float(cfg.get("greeting_cooldown_s", 3.0)))
+    os.environ["GREETING_USER_COOLDOWN_S"] = str(float(cfg.get("greeting_user_cooldown_s", 180.0)))
+    os.environ["GREETING_MAX_BATCH"] = str(int(cfg.get("greeting_max_batch", 5)))
+    os.environ["SALES_MAX_WORDS"] = str(int(cfg.get("sales_max_words", 75)))
+    os.environ["REMIND_ENABLED"] = "true" if cfg.get("remind_enabled", True) else "false"
+    os.environ["REMIND_MIN_S"] = str(float(cfg.get("remind_min_s", 60.0)))
+    os.environ["REMIND_MAX_S"] = str(float(cfg.get("remind_max_s", 120.0)))
+    os.environ["REMIND_TEXT"] = str(cfg.get("remind_text", ""))
 
     # audio_player doc os.environ moi lan phat -> set env la du (process moi thua huong)
     os.environ["AUDIO_OUTPUT_DEVICE"] = str(cfg["audio_device"])
@@ -389,18 +442,6 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["GOLOGIN_ACTIVE_VERSION"] = str(cfg.get("gologin_active_version", ""))
     os.environ["GOLOGIN_PROFILE_ID"] = str(cfg.get("gologin_profile_id", ""))
     os.environ["BROWSER_MODE"] = str(cfg.get("browser_mode", "gologin_cdp"))
-    os.environ["PROMPTS_DIR"] = str(cfg.get("prompts_dir", "prompts"))
-    os.environ["CONTEXT_DIR"] = str(cfg.get("context_dir", "context-data"))
-    os.environ["BATCH_WINDOW_S"] = str(cfg.get("batch_window_s", 3.0))
-    os.environ["BATCH_MAX_EVENTS"] = str(cfg.get("batch_max_events", 10))
-    os.environ["GREETING_COOLDOWN_S"] = str(cfg.get("greeting_cooldown_s", 3.0))
-    os.environ["GREETING_USER_COOLDOWN_S"] = str(cfg.get("greeting_user_cooldown_s", 180.0))
-    os.environ["CONTEXT_LIVE_DIR"] = str(cfg.get("context_live_dir", "context-live"))
-    os.environ["SALES_MAX_WORDS"] = str(cfg.get("sales_max_words", 75))
-    os.environ["REMIND_ENABLED"] = "true" if cfg.get("remind_enabled", True) else "false"
-    os.environ["REMIND_MIN_S"] = str(cfg.get("remind_min_s", 60.0))
-    os.environ["REMIND_MAX_S"] = str(cfg.get("remind_max_s", 120.0))
-    os.environ["REMIND_TEXT"] = str(cfg.get("remind_text", ""))
 
     return cfg
 

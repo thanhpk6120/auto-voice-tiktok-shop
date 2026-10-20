@@ -5,8 +5,11 @@ root_dir = Path(__file__).resolve().parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from src.config import LLM_BASE_URL, LLM_MODEL
-from src.llm_client import chat
+from src.llm_client import chat, _llm_cfg
+
+_cfg = _llm_cfg()
+LLM_BASE_URL = _cfg["base_url"]
+LLM_MODEL = _cfg["model"]
 
 
 def main():

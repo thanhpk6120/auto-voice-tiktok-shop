@@ -46,7 +46,6 @@ hiddenimports = [
     "gui",
     "launcher",
     "settings",
-    "config",
     "audio_player",
     "audio_queue",
     "event_analyzer",

@@ -8,6 +8,26 @@ import urllib.error
 _thinking_cache: dict[str, int | None] = {}
 
 
+def _llm_cfg() -> dict:
+    """Cau hinh LLM hien tai (doc luc goi, khong bind cung luc import).
+
+    Nguon: settings.get() -> DEFAULTS -> config.json -> .env.
+    Doc moi lan vi GUI doi model/key ngay khi app dang chay.
+    """
+    try:
+        import settings
+
+        cfg = settings.get()
+    except Exception:
+        cfg = {}
+    return {
+        "base_url": str(cfg.get("llm_base_url") or "http://192.168.1.68:20128/v1").rstrip("/"),
+        "model": str(cfg.get("llm_model") or "claude-opus-5"),
+        "api_key": str(cfg.get("llm_api_key") or ""),
+        "timeout": float(cfg.get("llm_timeout_s") or 20),
+        "disable_thinking": bool(cfg.get("llm_disable_thinking", True)),
+    }
+
 def _parse_response(raw: str) -> dict:
     """Parse body LLM. Server that tra SSE: 1 JSON object day du + 'data: [DONE]'.
 
@@ -89,15 +109,12 @@ def _load_model_meta() -> dict[str, dict]:
     if _model_meta_loaded:
         return _model_meta
     _model_meta_loaded = True
-    try:  # chay tu goc repo (app.py them goc repo vao sys.path)
-        import src.config as c
-    except ImportError:
-        import config as c  # type: ignore[no-redef]
+    cfg = _llm_cfg()
     try:
         req = urllib.request.Request(
-            f"{c.LLM_BASE_URL}/models",
+            f"{cfg['base_url']}/models",
             headers={"Content-Type": "application/json",
-                     **({"Authorization": f"Bearer {c.LLM_API_KEY}"} if c.LLM_API_KEY else {})},
+                     **({"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {})},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
@@ -133,15 +150,12 @@ def _preferred_payloads(model: str) -> list[dict]:
 
 
 def chat(system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:
-    # Doc dong tu config: settings.apply() doi key/url/model co tac dung ngay.
-    try:  # chay tu goc repo (app.py them goc repo vao sys.path)
-        import src.config as c
-    except ImportError:  # frozen/onedir: chi con package phang `config`
-        import config as c  # type: ignore[no-redef]
+    # Doc dong tu settings: GUI doi key/url/model co tac dung ngay.
+    cfg = _llm_cfg()
 
-    timeout = float(getattr(c, "LLM_TIMEOUT_S", 20.0)) if timeout is None else timeout
-    url = f"{c.LLM_BASE_URL}/chat/completions"
-    model_name = model or c.LLM_MODEL
+    timeout = cfg["timeout"] if timeout is None else timeout
+    url = f"{cfg['base_url']}/chat/completions"
+    model_name = model or cfg["model"]
     base_payload = {
         "model": model_name,
         "messages": [
@@ -150,15 +164,15 @@ def chat(system: str, user: str, model: str | None = None, timeout: float | None
         ],
     }
     headers = {"Content-Type": "application/json"}
-    if c.LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {c.LLM_API_KEY}"
+    if cfg["api_key"]:
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
 
     # Tay thinking: server that ho tro, tat duoc -> nhanh hon nhieu.
     # Do duoc tren server that cua user: reasoning tokens 302 -> 0,
     # latency median 7056ms -> 4026ms, chat luong giong het (38 vs 37 tu).
     # Ten tham so khac nhau theo backend -> lay 'thinkingFormat' tu /v1/models
     # de chon dung thu tu, tranh request 400 thu lai.
-    disable_thinking = bool(getattr(c, "LLM_DISABLE_THINKING", True))
+    disable_thinking = cfg["disable_thinking"]
     variants = _preferred_payloads(model_name) if disable_thinking else []
     if model_name in _thinking_cache:
         idx = _thinking_cache[model_name]
@@ -211,17 +225,14 @@ def decide(model: str, state: str, questions: dict, timeout: float | None = None
     Decision model khong dung duoc voi /chat/completions. Payload:
     {"model": ..., "state": "<text>", "questions": {"ten": {...type: noul|choice...}}}
     """
-    try:  # chay tu goc repo (app.py them goc repo vao sys.path)
-        import src.config as c
-    except ImportError:  # frozen/onedir: chi con package phang `config`
-        import config as c  # type: ignore[no-redef]
+    cfg = _llm_cfg()
 
-    timeout = float(getattr(c, "LLM_TIMEOUT_S", 20.0)) if timeout is None else timeout
-    base = str(c.LLM_BASE_URL).rstrip("/")
+    timeout = cfg["timeout"] if timeout is None else timeout
+    base = cfg["base_url"]
     payload = {"model": model, "state": state, "questions": questions}
     headers = {"Content-Type": "application/json"}
-    if c.LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {c.LLM_API_KEY}"
+    if cfg["api_key"]:
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
     req = urllib.request.Request(
         f"{base}/systemone", data=json.dumps(payload).encode("utf-8"),
         headers=headers, method="POST")

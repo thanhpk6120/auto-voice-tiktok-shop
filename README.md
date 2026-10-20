@@ -184,16 +184,25 @@ python src/app.py doctor
 ```
 In trạng thái: VoiceStudio health, LLM health, thiết bị loa ra, bridge (số event nhận trong cửa sổ nghe), hàng đợi ưu tiên, simulator. Exit code `0` = tất cả OK, `1` = có thành phần FAIL.
 
-### Cấu hình (.env, tùy chọn)
+### Cấu hình (`.env`, tùy chọn)
+
+File `.env` (cạnh `.exe` hoặc gốc repo) là **override cao nhất**. Tên biến viết HOA,
+giá trị theo tên key trong `config.json`:
+
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
+| `LLM_BASE_URL` | `http://192.168.1.68:20128/v1` | LLM OpenAI-compatible |
+| `LLM_MODEL` | `claude-opus-5` | Model sinh câu thoại |
+| `LLM_API_KEY` | (rỗng) | API key LLM |
+| `ANALYST_LLM_MODEL` | `openrouter/typesafe/jev-1.13` | Model phân tích ý định bình luận |
 | `VOICE_URL` | `http://127.0.0.1:3900` | Endpoint VoiceStudio |
 | `VOICE_MODEL` | `omnivoice` | TTS engine của VoiceStudio |
 | `VOICE_NAME` | `default` | Voice profile / preset |
 | `TTS_TIMEOUT` | `60` | Timeout giây cho 1 lần synthesize |
 | `BRIDGE_URL` | `ws://127.0.0.1:8765/ws?role=app` | Bridge cho `run`/`doctor` |
 | `AUDIO_OUTPUT_DEVICE` | (mặc định) | Index (số) hoặc một phần tên thiết bị loa |
-| `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | xem `src/config.py` | LLM OpenAI-compatible cho analyzer |
+
+Xem `.env.example` làm mẫu đầy đủ.
 
 ### Chạy lại đúng kết quả đã kiểm chứng
 - Bằng chứng phiên chạy thật (doctor + simulate + run + phát tiếng + latency): [`docs/TEST-E2E-REAL.md`](docs/TEST-E2E-REAL.md).
@@ -260,15 +269,28 @@ Config lưu ở `%APPDATA%\AutoVoiceTikTokShop\config.json` (không ghi vào th�
 chạy được cả khi đặt trong `Program Files`). Ghi đè bằng biến môi trường
 `AUTO_VOICE_CONFIG=<duong dan json>` khi cần nhiều profile.
 
-Thứ tự ưu tiên: **file JSON → biến môi trường (.env) → DEFAULTS**.
+**Thứ tự ưu tiên: `.env` → file JSON → DEFAULTS.**
+
+| Nguồn | Vai trò |
+|---|---|
+| `DEFAULTS` trong `src/settings.py` | Giá trị mặc định khi chưa cấu hình gì |
+| `config.json` (%APPDATA%) | Nơi **GUI lưu** cấu hình, sửa tay cũng được |
+| `.env` (cạnh `.exe` hoặc gốc repo) | **Override cao nhất** — dành cho secrets (API key) và chỉnh nhanh tay |
+
+`.env` dùng tên key viết HOA (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`,
+`ANALYST_LLM_MODEL`…). Xem `.env.example` làm mẫu.
+
+> `os.environ` **không** được đọc khi nạp config — `settings.apply()` ghi giá trị
+> cuối cùng vào `os.environ` cho các module đọc env, nếu đọc ngược lại thì vòng lặp
+> giá trị cũ sẽ ghi đè cấu hình bạn vừa sửa trong GUI.
 
 Ví dụ `config.json`:
 
 ```json
 {
-  "llm_base_url": "http://192.168.1.68:20130/v1",
+  "llm_base_url": "http://192.168.1.68:20128/v1",
   "llm_api_key": "sk-...",
-  "llm_model": "claude-sonnet-5",
+  "llm_model": "claude-opus-5",
   "voicestudio_url": "http://127.0.0.1:3900",
   "voicestudio_voice": "alloy",
   "bridge_url": "ws://127.0.0.1:8765/ws?role=app",

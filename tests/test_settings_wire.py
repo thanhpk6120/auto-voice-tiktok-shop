@@ -1,7 +1,7 @@
 """Test: cau hinh trong settings.apply() phai thuc su co tac dung len runtime.
 
-Bug da gap: settings.apply() sua `config` nhung llm_client doc `src.config`
-(hai module object khac nhau) => doi LLM URL/key khong co tac dung.
+Config da duoc don ve 1 nguon: settings.get() (DEFAULTS -> config.json -> .env).
+apply() ghi gia tri cuoi cung vao os.environ cho module doc env.
 """
 from __future__ import annotations
 
@@ -30,10 +30,9 @@ def test_apply_sets_tts_client():
     assert tts_client.VOICE_NAME == "voice-x"
 
 
-def test_apply_sets_llm_in_both_module_objects():
-    """llm_client doc `src.config`; app.py co the import `config`. Ca hai phai duoc set."""
-    import config
-    import src.config as srcconfig
+def test_apply_sets_llm_config_and_env():
+    """apply() phai ghi gia tri LLM vao os.environ va settings.get() dung khi goi."""
+    import os
 
     cfg = settings.get()
     cfg["llm_base_url"] = "http://10.1.1.1:1111/v1"
@@ -42,14 +41,11 @@ def test_apply_sets_llm_in_both_module_objects():
     cfg["llm_disable_thinking"] = False
     settings.apply(cfg)
 
-    assert srcconfig.LLM_BASE_URL == "http://10.1.1.1:1111/v1"
-    assert srcconfig.LLM_MODEL == "model-abc"
-    assert srcconfig.LLM_API_KEY == "sk-live-abcdefghijkl"
-    assert srcconfig.LLM_DISABLE_THINKING is False
+    assert os.environ["LLM_BASE_URL"] == "http://10.1.1.1:1111/v1"
+    assert os.environ["LLM_MODEL"] == "model-abc"
+    assert os.environ["LLM_API_KEY"] == "sk-live-abcdefghijkl"
+    assert os.environ["LLM_DISABLE_THINKING"] == "0"
 
-    assert config.LLM_BASE_URL == "http://10.1.1.1:1111/v1"
-    assert config.LLM_API_KEY == "sk-live-abcdefghijkl"
-    assert config.LLM_DISABLE_THINKING is False
 
 def test_llm_client_reads_config_at_call_time():
     """llm_client.chat() phai doc base url luc goi, khong bind cung luc import."""
@@ -58,8 +54,8 @@ def test_llm_client_reads_config_at_call_time():
     import src.llm_client as llm_client
 
     src = inspect.getsource(llm_client.chat)
-    assert "LLM_BASE_URL" in src
-    assert "import src.config as c" in inspect.getsource(llm_client)
+    assert "_llm_cfg()" in src
+    assert "import src.config" not in inspect.getsource(llm_client)
 
 
 def test_analyzer_configure_applies_cooldown_and_batch():

@@ -393,13 +393,13 @@ def _check_voicestudio() -> tuple[bool, str]:
 
 def _check_llm() -> tuple[bool, str]:
     try:
-        from config import LLM_BASE_URL, LLM_MODEL
-        from llm_client import chat
+        from llm_client import chat, _llm_cfg
 
+        cfg = _llm_cfg()
         t0 = time.perf_counter()
-        reply = chat("Tra loi dung 1 tu.", "OK?", timeout=float(os.getenv("LLM_DOCTOR_TIMEOUT", "20")))
+        reply = chat("Tra doi dung 1 tu.", "OK?", timeout=float(os.getenv("LLM_DOCTOR_TIMEOUT", "20")))
         ms = (time.perf_counter() - t0) * 1000
-        return True, f"OK {LLM_BASE_URL} model={LLM_MODEL} latency={ms:.0f}ms reply='{reply.strip()[:40]}'"
+        return True, f"OK {cfg['base_url']} model={cfg['model']} latency={ms:.0f}ms reply='{reply.strip()[:40]}'"
     except Exception as e:
         return False, f"FAIL {type(e).__name__}: {e}"
 

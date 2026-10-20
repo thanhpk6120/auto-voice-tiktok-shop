@@ -44,6 +44,48 @@ def _rmtree(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def backup_user_data(dist: Path) -> Path | None:
+    """Backup du lieu nguoi dung trong dist truoc khi PyInstaller xoa san dist.
+
+    PyInstaller COLLECT voi --noconfirm goi _make_clean_directory -> rmtree
+    ca thu muc dist/AutoVoiceTikTokShop. Comment "khong rmtree lam mat du lieu"
+    o copy_runtime_files chi dung cho viec copy them, khong cua duoc viec xoa.
+    -> Phai backup truoc, restore sau.
+    """
+    items: list[str] = []
+    for name in ("context-live", "config.json", ".env"):
+        if (dist / name).exists():
+            items.append(name)
+    if not items:
+        return None
+    bak = dist.parent / f"_build_backup_{int(time.time())}"
+    bak.mkdir(parents=True, exist_ok=True)
+    for name in items:
+        src = dist / name
+        dst = bak / name
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+    print(f"[build] backup {', '.join(items)} -> {bak.name}", flush=True)
+    return bak
+
+
+def restore_user_data(dist: Path, bak: Path | None) -> list[str]:
+    """Restore du lieu nguoi dung sau khi PyInstaller xoa san dist."""
+    if bak is None or not bak.is_dir():
+        return []
+    restored: list[str] = []
+    for child in bak.iterdir():
+        dst = dist / child.name
+        if child.is_dir():
+            shutil.copytree(child, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(child, dst)
+        restored.append(child.name)
+    return restored
+
+
 def copy_runtime_files(dist: Path) -> list[str]:
     """Copy data nguoi dung co the sua + config mau ra canh .exe."""
     copied: list[str] = []
@@ -57,8 +99,8 @@ def copy_runtime_files(dist: Path) -> list[str]:
         shutil.copytree(src, dst)
         copied.append(name)
 
-    # Riêng context-live: giữ lại file context .md và cache của người dùng trong dist,
-    # không rmtree làm mất dữ liệu đã crawl.
+    # context-live: copy them tu repo (khong rmtree - file da crawl cua nguoi dung
+    # da duoc backup o backup_user_data truoc khi PyInstaller xoa san dist).
     src_live = ROOT / "context-live"
     dst_live = dist / "context-live"
     if src_live.is_dir():
@@ -78,14 +120,17 @@ def copy_runtime_files(dist: Path) -> list[str]:
 
 
 def config_example(dist: Path) -> Path:
-    """Ghi config.json mau (moi tab GUI deu co gia tri) canh .exe."""
+    """Ghi config.json mau canh .exe - KHONG ghi de config da sua tay."""
+    path = dist / "config.json"
+    if path.is_file():
+        # Da co config (restore tu backup hoac user tu tao) -> giu nguyen.
+        return path
     sys.path.insert(0, str(ROOT / "src"))
     try:
         import settings  # type: ignore
     except Exception as e:  # pragma: no cover - chan doan
         print(f"[build] khong import duoc settings: {e}")
-        return dist / "config.json"
-    path = dist / "config.json"
+        return path
     path.write_text(
         __import__("json").dumps(settings.DEFAULTS, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -99,32 +144,40 @@ def main() -> int:
     ap.add_argument("--skip-build", action="store_true", help="chi copy data (debug)")
     args = ap.parse_args()
 
+    dist = ROOT / "dist" / "AutoVoiceTikTokShop"
+
     if args.clean:
         _rmtree(ROOT / "build")
         _rmtree(ROOT / "dist")
 
     t0 = time.monotonic()
+    # Backup TRUOC: PyInstaller COLLECT se xoa san dist/ (ke context-live da crawl).
+    bak = None if args.skip_build else backup_user_data(dist)
+
     if not args.skip_build:
         code = _run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--log-level", "WARN", str(SPEC)])
         if code != 0:
             print(f"[build] PyInstaller FAIL (exit={code}) sau {time.monotonic() - t0:.0f}s")
             return code
 
-    dist = ROOT / "dist" / "AutoVoiceTikTokShop"
     exe = dist / "AutoVoiceTikTokShop.exe"
     if not exe.is_file():
         print(f"[build] FAIL: khong thay {exe}")
         return 1
 
     copied = copy_runtime_files(dist)
+    restored = restore_user_data(dist, bak)
     cfg = config_example(dist)
+    if bak is not None:
+        shutil.rmtree(bak, ignore_errors=True)
 
     print("\n=== BUILD XONG ===")
     print(f"exe          : {exe}")
     print(f"exe size     : {_human(exe.stat().st_size)}")
     print(f"dist size    : {_human(_tree_size(dist))}")
     print(f"copy them    : {', '.join(copied) if copied else '-'}")
-    print(f"config mau   : {cfg.name} (DEFAULTS)")
+    print(f"restore data : {', '.join(restored) if restored else '-'}")
+    print(f"config       : {cfg.name}")
     print(f"thoi gian    : {time.monotonic() - t0:.0f}s")
     print("\nThu chay:")
     print(f'  "{exe}" --help')

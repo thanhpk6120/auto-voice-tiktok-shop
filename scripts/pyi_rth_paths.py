@@ -1,13 +1,13 @@
 """Runtime hook: chay TRUOC khi app import. Chuan hoa sys.path khi frozen.
 
 Van de: `src/` duoc PyInstaller gom vao _internal/ duoi dang module phang (app.py,
-gui.py, settings.py...), nhung llm_client.py import `src.config` va app.py chen goc
-repo vao sys.path. Khi frozen khong co goc repo -> cac import do se fail.
+gui.py, settings.py...), nhung app.py chen goc repo vao sys.path. Khi frozen khong
+co goc repo -> cac import do se fail.
 
 Hook nay:
   1. Them thu muc _internal (sys._MEIPASS) vao sys.path.
-  2. Tao alias package `src` tro ve module phang, de `from src.config import ...`,
-     `import src.config as c` hoat dong nhat quan du chay source hay frozen.
+  2. Tao alias package `src` tro ve module phang, de `from src.settings import ...`
+     hoat dong nhat quan du chay source hay frozen.
 """
 import sys
 import types

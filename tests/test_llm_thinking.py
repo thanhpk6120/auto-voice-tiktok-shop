@@ -54,9 +54,21 @@ def _reset(monkeypatch, meta=None):
         llm_client._model_meta.update(meta)
 
 
+def _set_thinking(monkeypatch, enabled: bool) -> None:
+    """Bat/tat thinking trong config (llm_client doc settings.get() luc goi)."""
+    import settings
+
+    real_get = settings.get
+
+    def fake_get():
+        cfg = dict(real_get())
+        cfg["llm_disable_thinking"] = enabled
+        return cfg
+
+    monkeypatch.setattr(settings, "get", fake_get)
+
 def test_thinking_off_payload_added_by_default(monkeypatch):
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", True, raising=False)
+    _set_thinking(monkeypatch, True)
     _reset(monkeypatch, {"m1": {"thinkingCanDisable": True, "thinkingFormat": "openai"}})
     captured: list = []
     _install(monkeypatch, [_body("OK")], captured)
@@ -66,8 +78,7 @@ def test_thinking_off_payload_added_by_default(monkeypatch):
 
 def test_no_thinking_payload_when_model_cannot_disable(monkeypatch):
     """Server noi ro model nay khong tat duoc thinking -> khong gui tham so la."""
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", True, raising=False)
+    _set_thinking(monkeypatch, True)
     _reset(monkeypatch, {"m2": {"thinkingCanDisable": False, "thinkingFormat": "gemini-level"}})
     captured: list = []
     _install(monkeypatch, [_body("OK")], captured)
@@ -76,8 +87,7 @@ def test_no_thinking_payload_when_model_cannot_disable(monkeypatch):
 
 
 def test_thinking_omitted_when_disabled_in_config(monkeypatch):
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", False, raising=False)
+    _set_thinking(monkeypatch, False)
     _reset(monkeypatch, {"m3": {"thinkingCanDisable": True, "thinkingFormat": "openai"}})
     captured: list = []
     _install(monkeypatch, [_body("OK")], captured)
@@ -87,8 +97,7 @@ def test_thinking_omitted_when_disabled_in_config(monkeypatch):
 
 def test_falls_back_to_next_shape_on_400(monkeypatch):
     """Server strict tra 400 voi tham so dau -> thu tham so tiep theo, van tra content."""
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", True, raising=False)
+    _set_thinking(monkeypatch, True)
     _reset(monkeypatch, {"m4": {"thinkingCanDisable": True, "thinkingFormat": "openai"}})
     err = urllib.error.HTTPError(
         "http://x", 400, "Bad Request", {}, io.BytesIO(b'{"error":"unrecognized"}'))
@@ -102,8 +111,7 @@ def test_falls_back_to_next_shape_on_400(monkeypatch):
 
 def test_accepted_shape_is_cached_for_next_call(monkeypatch):
     """Sau khi server chap nhan 1 shape, cac lan sau dung lai -> khong request 400 du thua."""
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", True, raising=False)
+    _set_thinking(monkeypatch, True)
     _reset(monkeypatch, {"m5": {"thinkingCanDisable": True, "thinkingFormat": "openai"}})
     captured: list = []
     _install(monkeypatch, [_body("OK"), _body("OK")], captured)
@@ -117,8 +125,7 @@ def test_accepted_shape_is_cached_for_next_call(monkeypatch):
 def test_http_error_400_without_thinking_raises_immediately(monkeypatch):
     """Khong co tham so tat thinking -> 400 la loi client thuc su,
     fail ngay khong retry vo ich (tiet kiem timeout)."""
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", False, raising=False)
+    _set_thinking(monkeypatch, False)
     _reset(monkeypatch)
     err = urllib.error.HTTPError(
         "http://x", 400, "Bad Request", {}, io.BytesIO(b'{"error":"bad request"}'))
@@ -136,8 +143,7 @@ def test_http_error_400_without_thinking_raises_immediately(monkeypatch):
 
 def test_http_error_401_raises_immediately(monkeypatch):
     """401 (sai key / model) -> fail ngay, khong retry vo ich."""
-    import src.config as c
-    monkeypatch.setattr(c, "LLM_DISABLE_THINKING", True, raising=False)
+    _set_thinking(monkeypatch, True)
     _reset(monkeypatch, {"m7": {"thinkingCanDisable": True, "thinkingFormat": "openai"}})
     err = urllib.error.HTTPError(
         "http://x", 401, "Unauthorized", {}, io.BytesIO(b'{"error":"unauthorized"}'))

@@ -28,7 +28,6 @@ from html.parser import HTMLParser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 DEFAULT_BRIDGE_URL = os.getenv("BRIDGE_URL", "ws://127.0.0.1:8765/ws?role=app")
-_VALID_TYPES = {"join", "joined", "greeting", "chat", "comment", "message", "gift", "order"}
 
 
 class Hub:
@@ -105,6 +104,13 @@ _ALIAS_KEYS = {
     "ts": ("ts", "timestamp", "time", "created_at", "createdAt"),
 }
 SCHEMA_TYPES = ("join", "chat", "gift", "order", "viewing_product")
+# Loai su kien duoc phep di qua cong normalize(). Hop nhat tu SCHEMA_TYPES de khong
+# bao gio lech nhau: truoc day thieu "viewing_product" nen su kien "khach yeu cau/minh hoa
+# san pham" bi normalize() tra None IM LANG (log CDP in TRUOC normalize nen van hien ten
+# su kien -> rat kho lan nguyen nhan).
+_VALID_TYPES = ({"join", "joined", "greeting", "chat", "comment", "message", "gift", "order"}
+                | set(SCHEMA_TYPES)
+                | {"viewing", "view_product", "xem_san_pham"})
 SCHEMA_KEYS = ("type", "user", "ts", "text", "gift", "count", "product", "amount", "source")
 
 _JOIN_RE = re.compile(

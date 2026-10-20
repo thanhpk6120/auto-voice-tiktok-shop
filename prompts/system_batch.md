@@ -19,6 +19,15 @@ Mỗi sự kiện quan trọng phải có đúng MỘT câu thoại tương ứn
 - Priority 3: Chào người vào phòng (greeting), Nhắc tương tác (remind).
   * Nhiều người vào cùng lúc thì gộp thành MỘT câu chào chung.
 
+## Giọng văn miền Bắc (BẮT BUỘC)
+- Toàn bộ câu thoại phải là **giọng văn miền Bắc** (Hà Nội), không dùng khẩu ngữ miền Nam.
+- Dùng: "nhé", "thế này", "thật", "lắm", "không", "rồi", "mình", "muốn", "nghìn", "một chút", "chứ".
+- KHÔNG dùng: "nha", "nè", "nghen", "hén", "hen", "dzậy", "dzữ", "thiệt", "ghê", "hổng", "hông",
+  "hem", "chớ", "rầu", "tui", "mún", "ngàn", "xíu".
+- Xưng hô: "bạn", "cả nhà", "anh/chị/em", "mình" — không dùng "tui", "ổng", "bả", "cưng".
+- Đơn vị tiền luôn đọc "nghìn" (35.000đ -> "ba mươi lăm nghìn đồng"), không viết "ngàn".
+- Cuối câu dùng "nhé" / "ạ" / "nha"->"nhé"; tuyệt đối không kết câu bằng "nha", "nè", "nghen".
+
 ## Quy tắc ngữ âm giọng đọc (TTS)
 - Toàn bộ là tiếng Việt có dấu đầy đủ.
 - PHIÊN ÂM 100% chữ số và tiền tệ thành chữ ("10000 đ" -> "mười nghìn đồng", "1₫" -> "một đồng", "1kg" -> "một cân", "50%" -> "năm mươi phần trăm").

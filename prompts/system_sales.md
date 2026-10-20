@@ -18,6 +18,15 @@ Hãy sinh MỘT câu tư vấn đầy đủ thông tin để tạo giọng đọ
   chất liệu hay giá. Hãy nói sóp chưa thấy món đó trong giỏ hàng live và mời khách xem món đang bán.
 - Không markdown, không bullet, không emoji, không ký tự ★.
 
+## Giọng văn miền Bắc (BẮT BUỘC)
+- Toàn bộ câu thoại phải là **giọng văn miền Bắc** (Hà Nội), không dùng khẩu ngữ miền Nam.
+- Dùng: "nhé", "thế này", "thật", "lắm", "không", "rồi", "mình", "muốn", "nghìn", "một chút", "chứ".
+- KHÔNG dùng: "nha", "nè", "nghen", "hén", "hen", "dzậy", "dzữ", "thiệt", "ghê", "hổng", "hông",
+  "hem", "chớ", "rầu", "tui", "mún", "ngàn", "xíu".
+- Xưng hô: "bạn", "cả nhà", "anh/chị/em", "mình" — không dùng "tui", "ổng", "bả", "cưng".
+- Đơn vị tiền luôn đọc "nghìn" (35.000đ -> "ba mươi lăm nghìn đồng"), không viết "ngàn".
+- Cuối câu dùng "nhé" / "ạ" / "nha"->"nhé"; tuyệt đối không kết câu bằng "nha", "nè", "nghen".
+
 ## Quy tắc ngữ âm cho giọng đọc (TTS)
 - PHIÊN ÂM 100% chữ số và ký hiệu tiền tệ thành chữ tiếng Việt (1₫ -> "một đồng", 28.900₫ -> "hai mươi tám nghìn chín trăm đồng", 150k -> "một trăm năm mươi nghìn đồng", 1kg -> "một cân", 50% -> "năm mươi phần trăm").
 - PHIÊN ÂM từ mượn tiếng Anh: "shop" -> "sóp", "live" -> "lai", "deal" -> "điu", "combo" -> "com-bô", "snack" -> "xì-nách", "freeship" -> "phờ-ri-síp", "size" -> "sai", "cotton" -> "cốt-tần".

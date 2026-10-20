@@ -275,6 +275,71 @@ def phoneticize_vietnamese(text: str) -> str:
         return m.group(0)
     res = re.sub(r"\b(\d+)\b", _replace_standalone_num, res)
 
+    return northernize_vietnamese(re.sub(r"\s+", " ", res).strip())
+
+
+# Trợ từ / cách nói đặc trưng miền Nam -> tương đương miền Bắc.
+# Chỉ đổi khi đứng riêng (có ranh giới từ) để không phá tên sản phẩm ("bánh nha" hiếm,
+# nhưng "nha đam" thì có thật -> loại trừ bằng danh sách _NORTH_KEEP).
+_NORTH_KEEP = ("nha đam", "nha sĩ", "nha khoa", "nha môn")
+_NORTH_PAIRS = [
+    (r"nha", "nhé"),
+    (r"nè", "này"),
+    (r"nghen", "nhé"),
+    (r"hén", "nhé"),
+    (r"hen", "nhé"),
+    (r"dzậy", "vậy"),
+    (r"dzữ", "dữ"),
+    (r"thiệt", "thật"),
+    (r"ghê", "lắm"),
+    (r"hổng", "không"),
+    (r"hông", "không"),
+    (r"hem", "không"),
+    (r"chớ", "chứ"),
+    (r"rầu", "rồi"),
+    (r"tui", "mình"),
+    (r"mún", "muốn"),
+    (r"ngàn", "nghìn"),
+    (r"xíu", "một chút"),
+]
+# Chi thay khi tu dung RIENG (khong dinh chu khac) va KHONG phai danh tu that.
+# Vi du giu nguyen: "nha dam", "nha si", "nha khoa", "hen suyen", "hem" (ngo cut).
+_NORTH_SKIP = {"hen": ("hẹn hò", "hen suyễn"), "hem": ("hẻm",)}
+_NORTH_RES = [(re.compile(p, re.I), r) for p, r in _NORTH_PAIRS]
+
+
+def northernize_vietnamese(text: str) -> str:
+    """Chuẩn hoá câu thoại về giọng văn miền Bắc (TTS đọc bằng giọng Hà Nội).
+
+    Vì sao cần: prompt LLM hay trả về trợ từ miền Nam ("nha", "nè", "nghen", "hổng",
+    "ngàn") vì dữ liệu huấn luyện nghiêng về khẩu ngữ Sài Gòn. Đọc bằng giọng Bắc sẽ
+    sượng. Đây là lớp chặn CUỐI, độc lập với chất lượng prompt: mọi câu trước khi vào
+    TTS đều đi qua `phoneticize_vietnamese` -> `northernize_vietnamese`.
+
+    Chỉ thay khi từ đứng riêng (ranh giới từ) và không thuộc cụm giữ nguyên
+    ("nha đam", "nha sĩ", "hen suyễn"...).
+    """
+    if not text:
+        return ""
+    res = str(text)
+
+    # Bảo vệ cụm mà "nha"/"hen" là từ thật bằng placeholder tạm
+    stash: dict[str, str] = {}
+    keep = list(_NORTH_KEEP)
+    for token in ("hen", "hem"):
+        keep.extend(_NORTH_SKIP.get(token, ()))
+    for i, phrase in enumerate(dict.fromkeys(keep)):
+        m = re.search(re.escape(phrase), res, re.I)
+        if m:
+            key = f"\x00K{i}\x00"
+            stash[key] = m.group(0)
+            res = res[: m.start()] + key + res[m.end() :]
+
+    for word, repl in _NORTH_PAIRS:
+        res = re.sub(rf"(?<![\wÀ-ỹ]){word}(?![\wÀ-ỹ])", repl, res, flags=re.I)
+
+    for key, original in stash.items():
+        res = res.replace(key, original)
     return re.sub(r"\s+", " ", res).strip()
 
 _VI_STOPWORDS = {
@@ -1070,6 +1135,11 @@ def analyze(event: dict, use_batcher: bool = True) -> dict:
             m_v = re.search(r"(?:đang xem|xem sản phẩm|viewing)\s*(.*)", raw_text, re.I)
             if m_v:
                 product = m_v.group(1).strip()
+            # Dashboard gửi kèm chỉ SỐ THỨ TỰ sản phẩm ("Số2"), không kèm field `product`.
+            # Dùng nguyên text làm khoá tra để ChatIntent.match bắt được theo index
+            # (regex `s[oố]\s*#?(\d+)`), thay vì bỏ trống rồi để LLM bịa tên món.
+            if not product and len(raw_text) <= 20 and not raw_text.lower().startswith(("đã ", "vừa ")):
+                product = raw_text
         
         product = _strip_emoji(product)
 

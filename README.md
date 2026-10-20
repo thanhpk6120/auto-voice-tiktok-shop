@@ -264,6 +264,29 @@ dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe run
 dist\AutoVoiceTikTokShop\AutoVoiceTikTokShop.exe simulate --no-play
 ```
 
+### Update bản `.exe` đang chạy ở thư mục khác
+
+Sau khi sửa code, build lại rồi đẩy sang thư mục đang chạy:
+
+```powershell
+python scripts/build_exe.py
+python scripts/update_dist.py "D:\AutoVoice"
+```
+
+| Lệnh | Copy gì |
+|---|---|
+| `update_dist.py "D:\AutoVoice"` | Chỉ `AutoVoiceTikTokShop.exe` (code nằm trong PYZ của file này) |
+| `+ --internal` | Thêm `_internal/` (thư viện runtime) — **chỉ khi đổi dependency** |
+
+Không ghi đè (giữ nguyên dữ liệu của bạn): `prompts/` (GUI ghi prompt thẳng vào
+thư mục cạnh `.exe`), `context-data/`, `context-live/`, `config.json`, `.env`.
+
+> Script sẽ **báo lỗi và không đụng gì** nếu app đang chạy (Windows khoá file
+> `.exe`). Hãy đóng app rồi chạy lại.
+>
+> `--internal` đổi tên `_internal/` cũ thành `_internal.old` (không xoá cứng) —
+> xoá sau khi verify bản mới chạy được.
+
 ### Chạy từ source — copy sang thư mục khác (không cần build lại .exe)
 
 ```powershell

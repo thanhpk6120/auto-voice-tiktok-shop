@@ -59,6 +59,7 @@ hiddenimports = [
     "intent_router",
     "phrase_cache",
     "remind_text",
+    "user_chat_memory",
 ]
 
 excludes = [

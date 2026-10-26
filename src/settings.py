@@ -171,6 +171,7 @@ FIELD_DOCS: dict[str, str] = {
     "remind_enabled": "Bật/Tắt tính năng đọc định kỳ câu nhắc người xem thả tim và bình luận.",
     "remind_min_s": "Thời gian ngẫu nhiên tối thiểu (giây) giữa 2 lần đọc câu nhắc tương tác.",
     "greeting_user_cooldown_s": "Thời gian không chào lại cùng một người xem (giây, mặc định 180s = 3 phút), tránh bị đọc lặp lại tên người xem nhiều lần.",
+    "chat_history_ttl_minutes": "Thời gian (phút) lưu giữ lịch sử hội thoại của mỗi khách hàng (mặc định 10 phút), hết hạn sẽ tự động xoá ngữ cảnh.",
     "remind_max_s": "Thời gian ngẫu nhiên tối đa (giây) giữa 2 lần đọc câu nhắc tương tác.",
     "remind_text": "Nội dung câu thoại nhắc nhở khán giả thả tim và tương tác trên live.",
     "out_dir": "Thư mục lưu trữ các file âm thanh .wav được tạo ra.",
@@ -431,6 +432,7 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["GREETING_COOLDOWN_S"] = str(float(cfg.get("greeting_cooldown_s", 3.0)))
     os.environ["GREETING_USER_COOLDOWN_S"] = str(float(cfg.get("greeting_user_cooldown_s", 180.0)))
     os.environ["GREETING_MAX_BATCH"] = str(int(cfg.get("greeting_max_batch", 5)))
+    os.environ["CHAT_HISTORY_TTL_MINUTES"] = str(float(cfg.get("chat_history_ttl_minutes", 10.0)))
     os.environ["SALES_MAX_WORDS"] = str(int(cfg.get("sales_max_words", 75)))
     os.environ["REMIND_ENABLED"] = "true" if cfg.get("remind_enabled", True) else "false"
     os.environ["REMIND_MIN_S"] = str(float(cfg.get("remind_min_s", 60.0)))

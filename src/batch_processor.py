@@ -381,8 +381,18 @@ def group_events_by_intent(
                 try:
                     from event_analyzer import _get_intent
                     ci = _get_intent()
-                    if ci and ci.match(text):
-                        intent = "product_question"
+                    if ci:
+                        p = ci.match(text)
+                        if not p and ev.get("user") and ucm.is_valid_user(ev["user"]):
+                            for turn in reversed(ucm.get_conversation_history(ev["user"])):
+                                p = ci.match(turn.get("user_text") or "")
+                                if p:
+                                    break
+                                p = ci.match(turn.get("reply_text") or "")
+                                if p:
+                                    break
+                        if p:
+                            intent = "product_question"
                 except Exception:
                     pass
             # 2. Khớp nhanh bằng luật từ khoá (giá, ship, chốt đơn, chào...) (0ms)
@@ -460,9 +470,24 @@ def process_event_batch(
     matched_products: list[dict] = []
     seen_prods: set[str] = set()
 
-    for ev in filtered_events:
+    def _match_event_or_history(ev: dict) -> dict | None:
         txt = ev.get("text") or ev.get("product") or ""
-        prod = intent.match(txt)
+        p = intent.match(txt)
+        if p:
+            return p
+        user = ev.get("user")
+        if user and ucm.is_valid_user(user):
+            for turn in reversed(ucm.get_conversation_history(user)):
+                p = intent.match(turn.get("user_text") or "")
+                if p:
+                    return p
+                p = intent.match(turn.get("reply_text") or "")
+                if p:
+                    return p
+        return None
+
+    for ev in filtered_events:
+        prod = _match_event_or_history(ev)
         if prod and prod["name"] not in seen_prods:
             seen_prods.add(prod["name"])
             matched_products.append(prod)
@@ -502,8 +527,7 @@ def process_event_batch(
         if group_intent != "greeting":
             gseen: set[str] = set()
             for ev in group_events:
-                gtxt = ev.get("text") or ev.get("product") or ""
-                gprod = intent.match(gtxt)
+                gprod = _match_event_or_history(ev)
                 if gprod and gprod["name"] not in gseen:
                     gseen.add(gprod["name"])
                     group_products.append(gprod)

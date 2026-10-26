@@ -132,8 +132,9 @@ def format_history_for_prompt(user: str, current_text: str | None = None) -> str
     if not lines:
         return ""
 
+    mins = int(round(get_ttl_seconds() / 60.0))
     header = (
-        f"LỊCH SỬ TRAO ĐỔI GẦN ĐÂY VỚI KHÁCH HÀNG ({user}) TRONG VÒNG 10 PHÚT QUA:\n"
+        f"LỊCH SỬ TRAO ĐỔI GẦN ĐÂY VỚI KHÁCH HÀNG ({user}) TRONG VÒNG {mins} PHÚT QUA:\n"
         + "\n".join(lines)
         + "\n* Lưu ý: Khách đang nói tiếp câu chuyện ở trên, hãy trả lời liền mạch, ăn khớp với ngữ cảnh đã trao đổi!"
     )

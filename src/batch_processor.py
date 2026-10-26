@@ -22,7 +22,23 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+
+try:
+    import user_chat_memory as ucm
+except Exception:
+    try:
+        from . import user_chat_memory as ucm
+    except Exception:
+        from src import user_chat_memory as ucm
+
+def _current_time_str() -> str:
+    """Ngữ cảnh ngày giờ thực tế để trả lời chính xác khi khách hỏi hôm nay ngày mấy."""
+    now = datetime.now()
+    days = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+    day_name = days[now.weekday()]
+    return f"Thời điểm hiện tại trên phiên live: {day_name}, ngày {now.day:02d}/{now.month:02d}/{now.year}, lúc {now.hour:02d}:{now.minute:02d}"
 
 from event_analyzer import (
     analyze,
@@ -511,6 +527,18 @@ def process_event_batch(
         else:
             ctx_str = "(câu chào không cần nhắc sản phẩm, KHÔNG quảng cáo món nào)"
 
+        # Thu thập lịch sử trò chuyện gần nhất theo từng khách hàng (trong 10 phút)
+        history_blocks: list[str] = []
+        for ev in group_events:
+            u = ev.get("user")
+            t = ev.get("text")
+            if u and t and ucm.is_valid_user(u):
+                h = ucm.format_history_for_prompt(u, t)
+                if h and h not in history_blocks:
+                    history_blocks.append(h)
+                ucm.add_user_message(u, t)
+        history_ctx = ("\n\n" + "\n\n".join(history_blocks)) if history_blocks else ""
+        time_ctx = _current_time_str()
         if group_intent == "greeting":
             try:
                 import phrase_cache
@@ -533,12 +561,17 @@ def process_event_batch(
             )
         else:
             user_prompt = (
-                f"Ngữ cảnh giỏ hàng trên phiên live:\n{ctx_str}\n\n"
+                f"{time_ctx}\n\n"
+                f"Ngữ cảnh giỏ hàng trên phiên live:\n{ctx_str}{history_ctx}\n\n"
                 f"Nhóm ý định: {group_intent}\n"
                 f"Danh sách sự kiện thuộc nhóm này:\n"
                 f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
                 f"HƯỚNG DẪN TRẢ LỜI:\n"
-                f"1. TRẢ LỜI TRỰC TIẾP, ĐÚNG VÀO CÂU HỎI của khách trước (kể cả câu hỏi đơn giản/xã giao như ăn cơm chưa, ship mấy ngày, có cay/ngọt không...). Giữ giọng điệu tự nhiên, thân thiện, vui vẻ như streamer thực thụ.\n"
+                f"1. TRẢ LỜI TRỰC TIẾP, ĐÚNG VÀO CÂU HỎI của khách trước:\n"
+                f"   - Nếu khách hỏi ngày/giờ: dùng đúng ngày tháng trong '{time_ctx}'.\n"
+                f"   - Nếu khách hỏi thời tiết: trả lời tự nhiên, vui vẻ, mời khách ở nhà nhâm nhi đồ ăn xem lai.\n"
+                f"   - Nếu khách hỏi thời tiết mưa gió giao bao lâu: trả lời thật lòng là mưa gió shipper có thể chậm hơn 1-2 ngày (tầm 2-3 ngày nhận được), nhưng hàng luôn được đóng gói bọc kỹ chống nước cẩn thận, đảm bảo giòn ngon.\n"
+                f"   - Nếu có lịch sử trò chuyện với khách ở trên: trả lời liền mạch, ăn khớp câu chuyện trước đó.\n"
                 f"2. Xưng hô linh hoạt, có duyên: tự xưng là 'mình', 'tớ', 'sóp', 'em', 'tôi', hoặc 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải xưng 'sóp'. Gọi khách là 'bạn', 'cả nhà', 'anh/chị/em' hoặc tên khách.\n"
                 f"3. Xoay quanh sản phẩm trong giỏ hàng: KHÔNG bịa tên sản phẩm, chất liệu hay giá. Nếu khách hỏi sản phẩm có trong giỏ hàng (kể cả gọi tắt như chuối, gà, bánh...), hãy đối chiếu và tư vấn đúng món đó. Chỉ khi khách hỏi món hoàn toàn không liên quan (như hỏi đồ điện tử, quần áo khi shop bán đồ ăn) thì mới lịch sự báo shop chưa có món này.\n"
                 f"4. Nhẹ nhàng mời khách bấm giỏ hàng góc trái màn hình để xem thêm ưu đãi.\n\n"
@@ -569,6 +602,11 @@ def process_event_batch(
                     # priority nhóm cao không thể thấp hơn ưu tiên nhóm
                     if int(it.get("priority", 3)) > group_priority:
                         it["priority"] = group_priority
+                    u = it.get("user")
+                    spk = it.get("text")
+                    if u and spk:
+                        ucm.add_bot_reply(u, spk)
+                ucm.cleanup_expired()
                 all_items.extend(items)
             else:
                 print(f"[batch_processor] LLM nhóm '{group_intent}' trả về rỗng / không parse được JSON, dùng fallback cục bộ", flush=True)

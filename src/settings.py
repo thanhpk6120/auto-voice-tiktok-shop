@@ -75,6 +75,8 @@ DEFAULTS: dict = {
     "gologin_active_version": "",
     "gologin_profile_id": "",
     "browser_mode": "gologin_cdp",
+    # Nho luong hoi thoai khach hang (phut)
+    "chat_history_ttl_minutes": 10.0,
     # UI
     "log_level": "INFO",
 }
@@ -115,6 +117,7 @@ SECTIONS: dict = {
         "greeting_cooldown_s",
         "greeting_user_cooldown_s",
         "greeting_max_batch",
+        "chat_history_ttl_minutes",
     ],
     "Trình duyệt / GoLogin": [
         "gologin_dir",

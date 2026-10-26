@@ -52,11 +52,10 @@ def backup_user_data(dist: Path) -> Path | None:
     o copy_runtime_files chi dung cho viec copy them, khong cua duoc viec xoa.
     -> Phai backup truoc, restore sau.
     """
-    # context-live + config.json + .env + prompts + context-data: du lieu nguoi
-    # dung (GUI ghi prompt thang vao thu muc canh .exe, context-data user sua
-    # tay). COLLECT se xoa san dist -> phai backup de restore.
+    # context-live + config.json + .env: du lieu runtime/secret cua nguoi dung.
+    # prompts va context-data duoc cap nhat moi tu repo khi build.
     items: list[str] = []
-    for name in ("context-live", "config.json", ".env", "prompts", "context-data"):
+    for name in ("context-live", "config.json", ".env"):
         if (dist / name).exists():
             items.append(name)
     if not items:

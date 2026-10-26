@@ -60,6 +60,8 @@ def main() -> int:
     ap.add_argument("target", help="thu muc dang chay app (.exe)")
     ap.add_argument("--internal", action="store_true",
                     help="copy lai _internal/ (dung khi doi dependency)")
+    ap.add_argument("--prompts", action="store_true",
+                    help="ghi de cap nhat cac file prompts/ moi tu ban build")
     ap.add_argument("--dry-run", action="store_true", help="chi hien thi ke hoach")
     args = ap.parse_args()
 
@@ -117,8 +119,8 @@ def main() -> int:
         print(f"  + {INTERNAL}/  ({_human(_tree_size(DIST / INTERNAL))})")
 
     # 4) prompts/ + context-data/: ban canh .exe THANG ban trong _internal
-    #    (resolve_path uu tien _project_root()). Copy file moi/chua co - file
-    #    user da sua (GUI ghi prompt thang vao thu muc canh .exe) giu nguyen.
+    #    (resolve_path uu tien _project_root()). Neu co --prompts: ghi de file prompt.
+    #    Neu khong: giu file cu, them file moi (rieng file prompt hong/rac < 100B tu dong ghi de).
     for name in ("prompts", "context-data"):
         src = DIST / name
         if not src.is_dir():
@@ -126,17 +128,30 @@ def main() -> int:
         target = dst / name
         target.mkdir(parents=True, exist_ok=True)
         added = 0
+        updated = 0
         for f in src.rglob("*"):
             if not f.is_file():
                 continue
             t = target / f.relative_to(src)
-            if t.exists():
-                continue
-            t.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, t)
-            added += 1
-        print(f"  = {name}/ (giu file cu, them {added} file moi)")
+            overwrite = False
+            if name == "prompts" and args.prompts:
+                overwrite = True
+            elif name == "prompts" and t.exists() and t.stat().st_size < 100:
+                # File bi loi/rac test (< 100 bytes) -> tu dong ghi de ban chuan
+                overwrite = True
 
+            if not t.exists():
+                t.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, t)
+                added += 1
+            elif overwrite:
+                shutil.copy2(f, t)
+                updated += 1
+        msg = f"  = {name}/ (them {added} file moi"
+        if updated > 0:
+            msg += f", cap nhat {updated} file"
+        msg += ")"
+        print(msg)
     # 5) context-live: giu nguyen du lieu crawl, chi them file moi chua co.
     live_src = DIST / "context-live"
     live_dst = dst / "context-live"

@@ -24,7 +24,7 @@ Mỗi sự kiện quan trọng phải có đúng MỘT câu thoại tương ứn
 - Dùng: "nhé", "thế này", "thật", "lắm", "không", "rồi", "mình", "muốn", "nghìn", "một chút", "chứ".
 - KHÔNG dùng: "nha", "nè", "nghen", "hén", "hen", "dzậy", "dzữ", "thiệt", "ghê", "hổng", "hông",
   "hem", "chớ", "rầu", "tui", "mún", "ngàn", "xíu".
-- Xưng hô: "bạn", "cả nhà", "anh/chị/em", "mình" — không dùng "tui", "ổng", "bả", "cưng".
+- Xưng hô: tự xưng linh hoạt ("mình", "tớ", "sóp", "em", "tôi", "tấm thân nhỏ bé này"...); gọi khách là "bạn", "cả nhà", "anh/chị/em", "mọi người" — không dùng "tui", "ổng", "bả", "cưng".
 - Đơn vị tiền luôn đọc "nghìn" (35.000đ -> "ba mươi lăm nghìn đồng"), không viết "ngàn".
 - Cuối câu dùng "nhé" / "ạ" / "nha"->"nhé"; tuyệt đối không kết câu bằng "nha", "nè", "nghen".
 

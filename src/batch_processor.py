@@ -359,7 +359,27 @@ def group_events_by_intent(
             intent = "greeting"
         else:  # chat / comment / message / remind ... -> phân loại theo nội dung
             text = str(ev.get("text") or ev.get("message") or ev.get("content") or "")
-            intent = (ir.classify_intent(text, products=products)).get("intent") or "other"
+            intent = ""
+            # 1. Khớp nhanh sản phẩm trong giỏ hàng (chuối, bim bim, bánh...) -> hỏi sản phẩm ngay (0ms)
+            if products:
+                try:
+                    from event_analyzer import _get_intent
+                    ci = _get_intent()
+                    if ci and ci.match(text):
+                        intent = "product_question"
+                except Exception:
+                    pass
+            # 2. Khớp nhanh bằng luật từ khoá (giá, ship, chốt đơn, chào...) (0ms)
+            if not intent:
+                try:
+                    rule = ir.classify_intent_rules(text)
+                    if rule.get("intent") in ("product_question", "order", "gift", "greeting"):
+                        intent = rule["intent"]
+                except Exception:
+                    pass
+            # 3. Câu trò chuyện xã giao khác -> mới gọi model AI phân loại sâu
+            if not intent:
+                intent = (ir.classify_intent(text, products=products)).get("intent") or "other"
         out.setdefault(intent, []).append(ev)
     return out
 
@@ -473,12 +493,24 @@ def process_event_batch(
                     group_products.append(gprod)
             if not group_products:
                 group_products = matched_products
-        ctx_str = "\n".join(
-            f"- Tên: {pp['name']} | Giá: {pp.get('price') or 'ưu đãi'} | Số thứ tự: {pp.get('index') or '-'}\n"
-            f"  Mô tả: {(pp.get('description') or (pp.get('ctx') or '')).strip()[:400]}"
-            for pp in group_products[:3]
-        ) or ("(không có — câu chào không cần nhắc sản phẩm, KHÔNG quảng cáo món nào)"
-              if group_intent == "greeting" else "KHÔNG CÓ SẢN PHẨM NÀO KHỚP")
+
+        if group_products:
+            matched_info = "\n".join(
+                f"- Tên: {pp['name']} | Giá: {pp.get('price') or 'ưu đãi'} | Mã số: {pp.get('index') or '-'}\n"
+                f"  Mô tả: {(pp.get('description') or (pp.get('ctx') or '')).strip()[:400]}"
+                for pp in group_products[:3]
+            )
+            ctx_str = f"Sản phẩm khớp với câu hỏi của khách:\n{matched_info}"
+        elif group_intent != "greeting":
+            # Dua tom tat danh sach gio hang de LLM tu doi chieu neu khach goi tat (chuoi, ga, bim bim...)
+            live_prods = [
+                f"- Mã {p.get('index', '-')}: {p['name'][:60]} | Giá: {p.get('price', 'ưu đãi')}"
+                for p in getattr(intent, "products", [])[:12]
+            ]
+            ctx_str = "KHÔNG CÓ SẢN PHẨM NÀO KHỚP TRỰC TIẾP.\nDanh sách sản phẩm đang có trên giỏ hàng live (để đối chiếu):\n" + ("\n".join(live_prods) if live_prods else "(chưa có sản phẩm)")
+        else:
+            ctx_str = "(câu chào không cần nhắc sản phẩm, KHÔNG quảng cáo món nào)"
+
         if group_intent == "greeting":
             try:
                 import phrase_cache
@@ -487,32 +519,29 @@ def process_event_batch(
                 avoid_ctx = ""
             if avoid_ctx:
                 ctx_str = f"{ctx_str}\n\n{avoid_ctx}"
-        if group_intent == "greeting":
             user_prompt = (
                 f"Ngữ cảnh: {ctx_str}\n\n"
                 f"Nhóm ý định: greeting (khách vừa vào phòng / vừa chào shop)\n"
                 f"Danh sách sự kiện thuộc nhóm này:\n"
                 f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
-                f"YÊU CẦU: chỉ chào hỏi ngắn gọn và mời khách ở lại xem lai. TUYỆT ĐỐI không "
-                f"giới thiệu, không quảng cáo, không nêu tên sản phẩm hay giá — khách chưa hỏi.\n\n"
+                f"YÊU CẦU: chỉ chào hỏi ngắn gọn, vui vẻ và mời khách ở lại xem lai. Xưng hô tự nhiên, linh hoạt (mình, tớ, sóp, em, tôi... tuỳ bạn chọn). "
+                f"TUYỆT ĐỐI không giới thiệu, không quảng cáo, không nêu tên sản phẩm hay giá — khách chưa hỏi.\n\n"
                 f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
                 f"dùng đúng các khoá: {{\"type\": \"greeting\", \"user\": \"tên khách\", "
                 f"\"text\": \"câu chào tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
                 f"Không thêm lời dẫn, không markdown, không ```json."
             )
         else:
-            no_match = "KHÔNG CÓ SẢN PHẨM NÀO KHỚP" in ctx_str
             user_prompt = (
-                f"Ngữ cảnh sản phẩm trên live (lấy từ context-live hiện tại):\n{ctx_str}\n\n"
+                f"Ngữ cảnh giỏ hàng trên phiên live:\n{ctx_str}\n\n"
                 f"Nhóm ý định: {group_intent}\n"
                 f"Danh sách sự kiện thuộc nhóm này:\n"
                 f"{json.dumps(group_payload, ensure_ascii=False, indent=2)}\n\n"
-                + (
-                    "CẢNH BÁO: khách nhắc một sản phẩm KHÔNG có trong giỏ hàng live hiện tại. "
-                    "Tuyệt đối KHÔNG bịa tên sản phẩm, chất liệu hay giá. Hãy nói sóp chưa thấy "
-                    "món đó trong giỏ hàng và mời khách xem các món đang bán, hoặc hỏi lại rõ tên món.\n\n"
-                    if no_match and group_intent != "greeting" else ""
-                ) +
+                f"HƯỚNG DẪN TRẢ LỜI:\n"
+                f"1. TRẢ LỜI TRỰC TIẾP, ĐÚNG VÀO CÂU HỎI của khách trước (kể cả câu hỏi đơn giản/xã giao như ăn cơm chưa, ship mấy ngày, có cay/ngọt không...). Giữ giọng điệu tự nhiên, thân thiện, vui vẻ như streamer thực thụ.\n"
+                f"2. Xưng hô linh hoạt, có duyên: tự xưng là 'mình', 'tớ', 'sóp', 'em', 'tôi', hoặc 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải xưng 'sóp'. Gọi khách là 'bạn', 'cả nhà', 'anh/chị/em' hoặc tên khách.\n"
+                f"3. Xoay quanh sản phẩm trong giỏ hàng: KHÔNG bịa tên sản phẩm, chất liệu hay giá. Nếu khách hỏi sản phẩm có trong giỏ hàng (kể cả gọi tắt như chuối, gà, bánh...), hãy đối chiếu và tư vấn đúng món đó. Chỉ khi khách hỏi món hoàn toàn không liên quan (như hỏi đồ điện tử, quần áo khi shop bán đồ ăn) thì mới lịch sự báo shop chưa có món này.\n"
+                f"4. Nhẹ nhàng mời khách bấm giỏ hàng góc trái màn hình để xem thêm ưu đãi.\n\n"
                 f"BẮT BUỘC chỉ trả về DUY NHẤT 1 MẢNG JSON, mỗi phần tử là 1 sự kiện trong danh sách trên,\n"
                 f"dùng đúng các khoá: {{\"type\": \"{group_intent}\", \"user\": \"tên khách\", "
                 f"\"text\": \"câu thoại tiếng Việt đã phiên âm\", \"priority\": {group_priority}}}\n"
@@ -541,6 +570,10 @@ def process_event_batch(
                     if int(it.get("priority", 3)) > group_priority:
                         it["priority"] = group_priority
                 all_items.extend(items)
+            else:
+                print(f"[batch_processor] LLM nhóm '{group_intent}' trả về rỗng / không parse được JSON, dùng fallback cục bộ", flush=True)
+                for fallback in _local_fallback_items(group_events):
+                    all_items.append(fallback)
         except Exception as e:
             print(f"[batch_processor] LLM nhóm '{group_intent}' lỗi ({e}), dùng fallback cục bộ", flush=True)
             for fallback in _local_fallback_items(group_events):
@@ -550,4 +583,5 @@ def process_event_batch(
         return all_items
 
     # Fallback cuối cùng: toàn bộ lô đều lỗi -> xử lý cục bộ, không gọi LLM
+    print("[batch_processor] Toàn bộ lô sự kiện dùng fallback cục bộ", flush=True)
     return _local_fallback_items(events_for_grouping)

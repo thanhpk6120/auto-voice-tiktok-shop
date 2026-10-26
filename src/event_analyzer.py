@@ -520,7 +520,8 @@ class ChatIntent:
     def match(self, text: str) -> dict | None:
         tl = (text or "").lower()
         q_raw_tokens = [t.lower() for t in re.findall(r"\w+", tl, flags=re.UNICODE)]
-        q_tokens = set(q_raw_tokens) - _VI_STOPWORDS
+        q_tokens = [t for t in q_raw_tokens if t not in _VI_STOPWORDS]
+        q_token_set = set(q_tokens)
         q_bigrams = {f"{q_raw_tokens[i]} {q_raw_tokens[i + 1]}" for i in range(len(q_raw_tokens) - 1)}
         best_prod = None
         best_score = 0
@@ -535,12 +536,26 @@ class ChatIntent:
                 if int(idx_q.group(1)) == prod["index"]:
                     score += 250
 
+            # Khớp cả tên hoặc cụm từ khóa có ý nghĩa nằm trong tên sản phẩm
             if p_name_lower in tl:
                 score += 150
+            meaningful_phrase = " ".join(q_tokens)
+            if len(meaningful_phrase) >= 3 and meaningful_phrase in p_name_lower:
+                score += 120
+
+            # Khớp bigram
             matched_bigrams = prod.get("bigrams", set()).intersection(q_bigrams)
             score += len(matched_bigrams) * 40
-            matched_kws = prod.get("keywords", set()).intersection(q_tokens)
-            score += len(matched_kws) * 10
+
+            # Khớp từng token trong tên sản phẩm
+            for tok in q_token_set:
+                if len(tok) >= 2:
+                    if re.search(rf"\b{re.escape(tok)}\b", p_name_lower):
+                        score += 50
+                    elif tok in p_name_lower:
+                        score += 30
+                    elif tok in prod.get("keywords", set()):
+                        score += 15
 
             # San pham doc tu context-live (gio hang hien tai) thang khi hoa diem
             if score > best_score or (
@@ -626,7 +641,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "Khách vừa vào phòng hoặc vừa chào shop. Hãy sinh MỘT câu chào lại thật tự nhiên.\n"
             "Quy tắc:\n"
             "1. Toàn bộ là tiếng Việt có dấu đầy đủ, dài 15-30 từ.\n"
-            "2. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
+            "2. Tự xưng linh hoạt, tự nhiên: 'mình', 'tớ', 'sóp', 'em', 'tôi', 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải dùng từ 'sóp'. KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "3. Gọi đúng tên khách, mời khách ở lại xem live và bấm giỏ hàng.\n"
             "4. PHIÊN ÂM 100% chữ số thành chữ; phiên âm từ mượn (shop -> sóp, live -> lai, deal -> điu).\n"
             "5. Không markdown, không bullet, không emoji.\n"
@@ -639,7 +654,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "Bạn là streamer bán hàng livestream TikTok Shop. Khách vừa chốt đơn thành công.\n"
             "Quy tắc:\n"
             "1. Toàn bộ là tiếng Việt có dấu đầy đủ, dài 20-45 từ, giọng phấn khích, biết ơn.\n"
-            "2. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
+            "2. Tự xưng linh hoạt, tự nhiên: 'mình', 'tớ', 'sóp', 'em', 'tôi', 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải dùng từ 'sóp'. KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "3. Chúc mừng đúng tên khách, xác nhận đúng tên sản phẩm và giá ưu đãi trong dữ liệu được cấp.\n"
             "4. PHIÊN ÂM 100% chữ số và tiền tệ thành chữ (150000 -> 'một trăm năm mươi nghìn đồng').\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
@@ -650,7 +665,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "Bạn là streamer bán hàng livestream TikTok Shop. Khách vừa tặng quà cho phiên live.\n"
             "Quy tắc:\n"
             "1. Toàn bộ là tiếng Việt có dấu đầy đủ, dài 20-40 từ, giọng vui vẻ, biết ơn.\n"
-            "2. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
+            "2. Tự xưng linh hoạt, tự nhiên: 'mình', 'tớ', 'sóp', 'em', 'tôi', 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải dùng từ 'sóp'. KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "3. Cảm ơn đúng tên khách và đúng tên quà trong dữ liệu được cấp, không bịa.\n"
             "4. PHIÊN ÂM 100% chữ số thành chữ (10 -> 'mười').\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
@@ -670,7 +685,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "1. TOÀN BỘ câu trả lời PHẢI là tiếng Việt có dấu đầy đủ.\n"
             "2. TUYỆT ĐỐI KHÔNG viết số dạng chữ số hay ký hiệu tiền tệ. BẮT BUỘC PHIÊN ÂM TOÀN BỘ THÀNH CHỮ TIẾNG VIỆT (ví dụ: 1₫ -> 'một đồng', 28.900₫ -> 'hai mươi tám nghìn chín trăm đồng', 1kg -> 'một cân').\n"
             "3. TẤT CẢ từ tiếng Anh, từ mượn BẮT BUỘC PHIÊN ÂM (live -> lai, shop -> sóp, deal -> điu, snack -> xì-nách).\n"
-            "4. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
+            "4. Tự xưng linh hoạt, tự nhiên: 'mình', 'tớ', 'sóp', 'em', 'tôi', 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải dùng từ 'sóp'. KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "5. Trả lời nhiệt tình, dài 50-80 từ, tập trung chốt đơn vào giỏ hàng.\n"
             "6. Không dùng markdown, bullet, emoji.\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
@@ -683,7 +698,7 @@ def get_prompt(name: str, prompts_dir: str | Path | None = None) -> str:
             "Quy tắc:\n"
             "1. Luôn xưng hô tên khách một cách thân thiết (ví dụ: 'Chào {user}', 'Dạ {user} ơi').\n"
             "2. Trả lời tự nhiên, dài 15-40 từ, hướng khách xem giỏ hàng hoặc tương tác.\n"
-            "3. LUÔN tự xưng là 'sóp' (bắt buộc có chữ 'sóp'). KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
+            "3. Tự xưng linh hoạt, tự nhiên: 'mình', 'tớ', 'sóp', 'em', 'tôi', 'tấm thân nhỏ bé này'... KHÔNG bắt buộc câu nào cũng phải dùng từ 'sóp'. KHÔNG tự gọi mình là 'trợ lý' hay 'AI'.\n"
             "4. Toàn bộ là tiếng Việt có dấu, không emoji, không viết số, phiên âm từ tiếng Anh sang tiếng Việt (shop -> sóp, live -> lai).\n"
             "CHỈ trả về DUY NHẤT một object JSON hợp lệ, không thêm lời dẫn, không ```json.\n"
             'JSON mẫu: {"speak_text": "Dạ sóp chào bạn, bạn ở lại xem lai với sóp cho vui nhé!", "kind": "chat", "priority": 2}'

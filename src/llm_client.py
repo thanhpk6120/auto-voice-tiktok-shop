@@ -29,16 +29,47 @@ def _llm_cfg() -> dict:
     }
 
 def _parse_response(raw: str) -> dict:
-    """Parse body LLM. Server that tra SSE: 1 JSON object day du + 'data: [DONE]'.
-
-    json.loads() se vỡ ("Extra data") -> dung raw_decode de lay object dau tien.
-    Server co the bo tien to 'data: ' truoc moi chunk -> tach chunk ra roi parse.
-    """
+    """Parse body LLM. Ho tro ca JSON object day du va SSE stream."""
     text = (raw or "").lstrip()
     if not text:
         raise ValueError("empty LLM response")
 
-    # Case 1: body bat dau bang JSON object (ke ca khi kem 'data: [DONE]' phia sau).
+    # Neu la SSE stream (bat dau bang 'data:'): tach tung chunk va gop delta.content
+    if text.startswith("data:") or "\ndata:" in text:
+        chunks: list[dict] = []
+        delta_parts: list[str] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                chunks.append(obj)
+                try:
+                    delta = obj["choices"][0].get("delta") or {}
+                    c = delta.get("content")
+                    if c:
+                        delta_parts.append(c)
+                except (KeyError, IndexError, TypeError):
+                    pass
+        if delta_parts:
+            return {"choices": [{"message": {"role": "assistant", "content": "".join(delta_parts)}}]}
+        if chunks:
+            for ch in reversed(chunks):
+                try:
+                    if (ch["choices"][0].get("message") or {}).get("content"):
+                        return ch
+                except (KeyError, IndexError, TypeError):
+                    continue
+            return chunks[-1]
+
+    # JSON object thuong (ke ca khi co ky tu du phia sau)
     start = text.find("{")
     if start >= 0:
         try:
@@ -48,31 +79,7 @@ def _parse_response(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Case 2: SSE nhieu chunk 'data: {...}' -> lay chunk cuoi co message.content.
-    chunks: list[dict] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            chunks.append(obj)
-    if not chunks:
-        raise ValueError("khong doc duoc JSON tu body LLM")
-    for ch in reversed(chunks):
-        try:
-            if (ch["choices"][0].get("message") or {}).get("content"):
-                return ch
-        except (KeyError, IndexError, TypeError):
-            continue
-    return chunks[-1]
-
+    raise ValueError("khong doc duoc JSON tu body LLM")
 
 def _extract_content(body: dict) -> str:
     """Lay noi dung text tu response. Ho tro ca chat.completion va stream chunk."""
@@ -162,6 +169,8 @@ def chat(system: str, user: str, model: str | None = None, timeout: float | None
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        "stream": False,
+        "max_tokens": 180,
     }
     headers = {"Content-Type": "application/json"}
     if cfg["api_key"]:

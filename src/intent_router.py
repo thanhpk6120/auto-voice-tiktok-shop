@@ -94,7 +94,7 @@ def last_analyze_error() -> str:
 # de cau "shop ơi size XL còn không" khong bi nham thanh chao hoi.
 _FALLBACK_RULES: list[tuple[str, str]] = [
     ("product_question", r"\b(mã|ma|số|so|sp|item)\s*#?\d+\b"),
-    ("product_question", r"\b(giá|bao nhiêu|size|còn hàng|mua|đặt|ship|freeship|mẫu|màu|chất liệu|bảo hành|có sẵn)\b"),
+    ("product_question", r"\b(giá|bao nhiêu|nhiêu|size|còn hàng|hết hàng|mua|đặt|ship|freeship|giao|giao hàng|vận chuyển|mấy ngày|bao lâu|mẫu|màu|chất liệu|bảo hành|có sẵn|hạn sử dụng|hsd|date|ngon không|cay không|ngọt không)\b"),
     ("order", r"\b(chốt đơn|đặt hàng|đã mua|thanh toán|xác nhận đơn)\b"),
     ("gift", r"\b(tặng quà|tặng|gửi tặng|thả tim)\b"),
     ("greeting", r"^\s*(alo|a lô|a lo|hê lô|helo|hello|hi|chào|chao|goắt-sắp)\b.*$"),
@@ -213,7 +213,9 @@ def classify_intent(
                 "source": result.get("source", "rule"),
             })
         return result
-    # Đang tạm hoãn do lần trước bị 429 -> dùng luật ngay, không dội thêm request
+
+
+    # Dang tam hoan do lan truoc bi 429 -> dung luat ngay, khong doi them request
     if cfg_model and _in_rate_limit_cooldown():
         _LAST_ANALYZE_ERROR = (
             f"tạm hoãn gọi model phân tích còn {rate_limit_remaining_s():.0f}s (do bị giới hạn tần suất)"

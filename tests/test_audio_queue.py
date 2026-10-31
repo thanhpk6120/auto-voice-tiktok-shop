@@ -82,8 +82,36 @@ def test_dry_run_does_not_call_player():
 
 
 def test_overflow_drops_low_priority():
-    q = PriorityAudioQueue(dry_run=True)
+    q = PriorityAudioQueue(dry_run=True, max_per_kind=10)
     for i in range(60):
         q.put("greeting", 3, f"hi{i}", f"{i}.wav")
-    assert q.qsize() <= 51
+    assert q.qsize() <= 10
     assert q.stats["dropped_overflow"] > 0
+
+
+def test_max_per_kind_sliding_window_drops_oldest():
+    """Chỉ lưu tối đa 3 voice cho mỗi loại, khi có voice mới thì bỏ voice cũ nhất của loại đó."""
+    q = PriorityAudioQueue(dry_run=True, max_per_kind=3)
+
+    # Thêm 5 đơn hàng liên tiếp
+    for i in range(1, 6):
+        q.put("order", 1, f"đơn {i}", f"order_{i}.wav")
+
+    # Thêm 4 câu quà tặng liên tiếp
+    for i in range(1, 5):
+        q.put("gift", 1, f"quà {i}", f"gift_{i}.wav")
+
+    # Tổng số item trong queue chỉ còn tối đa 3 order + 3 gift = 6 item
+    assert q.qsize() == 6
+    assert q.stats["dropped_overflow"] == (2 + 1)  # 2 order cũ bị bỏ, 1 gift cũ bị bỏ
+
+    # Rút từng item ra kiểm tra: phải là các item MỚI NHẤT (order 3, 4, 5 và gift 2, 3, 4)
+    items = []
+    while not q.empty():
+        items.append(q.get())
+
+    order_texts = [it["speak_text"] for it in items if it["kind"] == "order"]
+    gift_texts = [it["speak_text"] for it in items if it["kind"] == "gift"]
+
+    assert order_texts == ["đơn 3", "đơn 4", "đơn 5"]
+    assert gift_texts == ["quà 2", "quà 3", "quà 4"]

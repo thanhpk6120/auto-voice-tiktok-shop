@@ -54,6 +54,7 @@ Các trường có thể chỉnh sửa trực tiếp trên giao diện GUI (Tab 
 
 ```json
 {
+  "queue_max_per_kind": 3,
   "idle_pitch_enabled": true,
   "idle_pitch_buffer_size": 10,
   "idle_pitch_min_s": 10.0,
@@ -65,9 +66,17 @@ Các trường có thể chỉnh sửa trực tiếp trên giao diện GUI (Tab 
 }
 ```
 
+- `queue_max_per_kind` *(int, mặc định: 3)*: Giới hạn số lượng voice tối đa lưu trong hàng đợi cho mỗi loại sự kiện (`order`, `gift`, `sales`, `greeting`, `auto_pitch`). Khi có câu mới cùng loại vượt quá 3, hệ thống **tự động xoá câu CŨ NHẤT** của loại đó để ưu tiên phản hồi các sự kiện mới nhất, đảm bảo tính realtime như livestream thật.
 - `idle_pitch_enabled` *(bool, mặc định: true)*: Bật/Tắt tính năng tự động giới thiệu sản phẩm khi live rảnh.
 - `idle_pitch_buffer_size` *(int, mặc định: 10)*: Số lượng voice ngẫu nhiên các sản phẩm được tạo sẵn lưu trong cache.
 - `idle_pitch_min_s` *(float, mặc định: 10.0s)*: Thời gian rảnh tối thiểu trước khi tự động phát voice giới thiệu.
+- `idle_pitch_max_s` *(float, mặc định: 30.0s)*: Thời gian rảnh tối đa trước khi tự động phát voice giới thiệu.
+- `post_speech_padding_s` *(float, mặc định: 0.35s)*: Thời gian đệm sau khi phát xong câu để tránh ngắt từ cuối và tạo nhịp nghỉ tự nhiên.
+
+---
+
+## 5. Cải tiến giao diện GUI
+
 1. **Kích thước cửa sổ:** Mở rộng từ `1040x780` lên `1150x840` (kích thước tối thiểu `1020x720`).
 2. **Khung Log thời gian thực co giãn linh hoạt (`ttk.PanedWindow`):**
    - Bọc Notebook (phần cấu hình trên) và Khung Log (dưới) vào `ttk.PanedWindow(orient='vertical')`.

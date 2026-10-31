@@ -20,7 +20,11 @@ INTERRUPT_PRIORITY = 1
 
 
 class PriorityAudioQueue:
-    """Hàng đợi ưu tiên + worker thread tiêu thụ, gọi `on_play(wav, stop_event)`."""
+    """Hàng đợi âm thanh ưu tiên theo luồng trượt realtime:
+    - Mỗi loại sự kiện (kind: order, gift, sales, greeting, auto_pitch...) chỉ giữ tối đa `max_per_kind` câu (mặc định 3).
+    - Khi có câu mới cùng loại mà đã đủ 3 câu: tự động bỏ câu CŨ NHẤT để ưu tiên câu MỚI NHẤT (cảm giác realtime).
+    - Thứ tự lấy ra: Priority 1 (order/gift) -> Priority 2 (sales/chat) -> Priority 3 (greeting/auto_pitch).
+    """
 
     def __init__(
         self,
@@ -30,10 +34,11 @@ class PriorityAudioQueue:
         queue_limit: int = 50,
         interrupt_mode: str = "finish",
         post_speech_padding_s: float = 0.35,
+        max_per_kind: int = 3,
     ):
-        self._q: queue.PriorityQueue = queue.PriorityQueue()
         self._counter = itertools.count()
-        self._limit = queue_limit
+        self._limit = max(5, int(queue_limit))
+        self._max_per_kind = max(1, int(max_per_kind))
         self._on_play = on_play
         self._dry_run = dry_run or on_play is None
         self._on_finish = on_finish
@@ -41,7 +46,9 @@ class PriorityAudioQueue:
         self.post_speech_padding_s = max(0.05, float(post_speech_padding_s))
         self._stop = threading.Event()
         self._interrupt = threading.Event()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._cond = threading.Condition(self._lock)
+        self._items: list[tuple[int, int, dict]] = []
         self._current: dict | None = None
         self._worker: threading.Thread | None = None
         self.stats = {
@@ -56,26 +63,73 @@ class PriorityAudioQueue:
     # ---------- API hàng đợi ----------
 
     def put(self, kind, priority, speak_text, wav) -> bool:
-        if self.qsize() > self._limit and (priority == 3 or kind == "greeting"):
-            self.stats["dropped_overflow"] += 1
-            return False
-        payload = {"kind": kind, "priority": priority, "speak_text": speak_text, "wav": wav}
-        self._q.put((priority, next(self._counter), payload))
-        if priority == INTERRUPT_PRIORITY:
-            self._request_interrupt()
-        return True
+        from pathlib import Path
+        with self._lock:
+            # 1. Giới hạn trượt theo từng loại (mỗi loại chỉ giữ tối đa max_per_kind voice, mặc định 3)
+            matching_indices = [
+                i for i, (_, _, p) in enumerate(self._items)
+                if p.get("kind") == kind
+            ]
+            if len(matching_indices) >= self._max_per_kind:
+                # Bỏ câu CŨ NHẤT của loại này (vị trí đầu tiên trong matching_indices)
+                drop_idx = matching_indices[0]
+                dropped_tuple = self._items.pop(drop_idx)
+                dropped_item = dropped_tuple[2]
+                self.stats["dropped_overflow"] += 1
+
+                # Dọn file wav tạm nếu cần
+                w = dropped_item.get("wav")
+                if w:
+                    try:
+                        pw = Path(w)
+                        if pw.is_file() and ("out" in pw.parts or "local_cache" in pw.parts or "pitch_" in pw.name):
+                            pw.unlink()
+                    except Exception:
+                        pass
+
+                old_txt = (dropped_item.get("speak_text") or "").strip().replace("\n", " ")[:40]
+                print(
+                    f"[queue] Hàng đợi loại '{kind}' đã đủ {self._max_per_kind} -> bỏ câu cũ nhất: '{old_txt}...' "
+                    f"để ưu tiên realtime (queue-size={len(self._items)})",
+                    flush=True,
+                )
+
+            # 2. Giới hạn trần tổng số lượng hàng đợi
+            if len(self._items) >= self._limit and (priority == 3 or kind in ("greeting", "auto_pitch")):
+                self.stats["dropped_overflow"] += 1
+                return False
+
+            payload = {"kind": kind, "priority": priority, "speak_text": speak_text, "wav": wav}
+            seq = next(self._counter)
+            self._items.append((priority, seq, payload))
+            # Sắp xếp theo: priority tăng dần (1 trước 2 trước 3), seq tăng dần (FIFO trong cùng priority)
+            self._items.sort(key=lambda x: (x[0], x[1]))
+            self._cond.notify()
+
+            if priority == INTERRUPT_PRIORITY:
+                self._request_interrupt()
+            return True
 
     def get(self, *args, **kwargs):
-        item = self._q.get(*args, **kwargs)
-        if isinstance(item, tuple) and len(item) == 3:
-            return item[2]
-        return item
+        import queue as _q
+        with self._lock:
+            timeout = kwargs.get("timeout", None)
+            if not self._items:
+                if kwargs.get("block", True) is False:
+                    raise _q.Empty
+                ok = self._cond.wait(timeout=timeout)
+                if not ok or not self._items:
+                    raise _q.Empty
+            _, _, item = self._items.pop(0)
+            return item
 
     def qsize(self) -> int:
-        return self._q.qsize()
+        with self._lock:
+            return len(self._items)
 
     def empty(self) -> bool:
-        return self._q.empty()
+        with self._lock:
+            return len(self._items) == 0
 
     def current(self) -> dict | None:
         with self._lock:
@@ -87,7 +141,7 @@ class PriorityAudioQueue:
 
     def is_idle(self) -> bool:
         with self._lock:
-            return self._current is None and self._q.empty()
+            return self._current is None and len(self._items) == 0
 
     # ---------- Worker ----------
 
@@ -100,18 +154,16 @@ class PriorityAudioQueue:
 
     def stop(self, drain: bool = True, timeout: float = 5.0) -> None:
         self._stop.set()
+        with self._lock:
+            self._cond.notify_all()
+            if drain:
+                self._items.clear()
         if self._worker is not None:
             self._worker.join(timeout=timeout)
             self._worker = None
-        if drain:
-            while not self._q.empty():
-                try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    break
 
     def _request_interrupt(self) -> None:
-        """Item p1 vua vao: ngat item dang phat neu mode la 'interrupt' va item la p2/p3."""
+        """Item p1 vừa vào: ngắt item đang phát nếu mode là 'interrupt' và item là p2/p3."""
         if self._dry_run or self.interrupt_mode == "finish":
             return
         with self._lock:
@@ -122,14 +174,17 @@ class PriorityAudioQueue:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                _, _, item = self._q.get(timeout=0.2)
-            except queue.Empty:
-                continue
+            with self._lock:
+                while not self._items and not self._stop.is_set():
+                    self._cond.wait(timeout=0.2)
+                if self._stop.is_set() and not self._items:
+                    break
+                if not self._items:
+                    continue
+                _, _, item = self._items.pop(0)
+                self._current = item
 
             self._interrupt.clear()
-            with self._lock:
-                self._current = item
             interrupted = False
             try:
                 if not self._dry_run and self._on_play is not None:
@@ -151,7 +206,10 @@ class PriorityAudioQueue:
                     if requeue_count < 2:
                         item["_requeue"] = requeue_count + 1
                         self.stats["requeued"] += 1
-                        self._q.put((item.get("priority", 3), next(self._counter), item))
+                        with self._lock:
+                            self._items.append((item.get("priority", 3), next(self._counter), item))
+                            self._items.sort(key=lambda x: (x[0], x[1]))
+                            self._cond.notify()
                     else:
                         self.stats["dropped_requeue"] += 1
             else:

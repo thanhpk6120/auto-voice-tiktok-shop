@@ -113,6 +113,7 @@ def _stream_events(args, stop_event: threading.Event):
 def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
     post_speech_padding_s = float(os.getenv("POST_SPEECH_PADDING_S", "0.35"))
+    queue_max_per_kind = int(os.getenv("QUEUE_MAX_PER_KIND", "3"))
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
     greeting_user_cooldown_s = float(os.getenv("GREETING_USER_COOLDOWN_S", "180.0"))
@@ -150,6 +151,7 @@ def handle_run(args) -> int:
         dry_run=no_play,
         interrupt_mode=interrupt_mode,
         post_speech_padding_s=post_speech_padding_s,
+        max_per_kind=queue_max_per_kind,
     ).start()
     stop_event = threading.Event()
     stats = {"spoke": 0, "tts_ok": 0, "tts_fail": 0, "lat_ms": []}
@@ -201,7 +203,7 @@ def handle_run(args) -> int:
                         collector.set_max_join_history(int(new_cfg.get("greeting_max_batch", 5)))
                         queue.interrupt_mode = str(new_cfg.get("interrupt_mode", queue.interrupt_mode))
                         queue._dry_run = bool(new_cfg.get("no_play", queue._dry_run))
-                        # Cấu hình mới (có thể đổi analyst_llm_model) -> xoá cache phân loại.
+                        queue._max_per_kind = max(1, int(new_cfg.get("queue_max_per_kind", queue._max_per_kind)))
                         # Cache sống ở tiến trình này, không phải tiến trình GUI.
                         try:
                             import intent_router

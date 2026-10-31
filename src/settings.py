@@ -57,6 +57,7 @@ DEFAULTS: dict = {
     # Audio
     "audio_device": "",
     "post_speech_padding_s": 0.35,
+    "queue_max_per_kind": 3,
     "no_play": False,
     "interrupt_mode": "finish",
     # Idle Auto-Pitch (Tự động tạo 10 voice giới thiệu sản phẩm khi Live rảnh)
@@ -104,6 +105,7 @@ SECTIONS: dict = {
     "Âm thanh & VoiceStudio": [
         "audio_device",
         "post_speech_padding_s",
+        "queue_max_per_kind",
         "voicestudio_url",
         "voicestudio_voice",
         "voicestudio_model",
@@ -188,6 +190,7 @@ FIELD_DOCS: dict[str, str] = {
     "batch_max_events": "Số lượng sự kiện tối đa được xử lý trong 1 batch để tránh quá tải bộ nhớ.",
     "audio_device": "Thiết bị âm thanh đầu ra để phát voice (Loa máy tính hoặc CABLE Input để đưa vào OBS).",
     "post_speech_padding_s": "Thời gian đệm sau khi phát xong câu (giây, mặc định 0.35s) để tránh ngắt từ cuối và tạo nhịp nghỉ tự nhiên.",
+    "queue_max_per_kind": "Số lượng voice tối đa lưu trong hàng đợi cho mỗi loại sự kiện (mặc định 3). Khi vượt quá, câu cũ nhất sẽ tự động bị bỏ qua để ưu tiên phản hồi realtime.",
     "idle_pitch_enabled": "Bật/Tắt tính năng tự động tạo voice giới thiệu sản phẩm và phát khi live rảnh.",
     "idle_pitch_buffer_size": "Số lượng voice ngẫu nhiên các sản phẩm được tạo sẵn lưu trong cache (mặc định 10 voice).",
     "idle_pitch_min_s": "Khoảng cách thời gian tối thiểu (giây) giữa 2 lần tự động giới thiệu sản phẩm khi live rảnh (mặc định 10s).",
@@ -473,6 +476,7 @@ def apply(cfg: dict | None = None) -> dict:
     # audio_player doc os.environ moi lan phat -> set env la du (process moi thua huong)
     os.environ["AUDIO_OUTPUT_DEVICE"] = str(cfg["audio_device"])
     os.environ["POST_SPEECH_PADDING_S"] = str(float(cfg.get("post_speech_padding_s", 0.35)))
+    os.environ["QUEUE_MAX_PER_KIND"] = str(int(cfg.get("queue_max_per_kind", 3)))
     os.environ["INTERRUPT_MODE"] = str(cfg.get("interrupt_mode", "finish"))
     os.environ["IDLE_PITCH_ENABLED"] = "true" if cfg.get("idle_pitch_enabled", True) else "false"
     os.environ["IDLE_PITCH_BUFFER_SIZE"] = str(int(cfg.get("idle_pitch_buffer_size", 10)))

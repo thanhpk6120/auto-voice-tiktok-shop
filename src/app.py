@@ -112,6 +112,7 @@ def _stream_events(args, stop_event: threading.Event):
 
 def handle_run(args) -> int:
     interrupt_mode = os.getenv("INTERRUPT_MODE", "finish")
+    post_speech_padding_s = float(os.getenv("POST_SPEECH_PADDING_S", "0.35"))
     no_play = bool(getattr(args, "no_play", False))
     play = audio_player.noop_play if no_play else audio_player.play_wav
     greeting_user_cooldown_s = float(os.getenv("GREETING_USER_COOLDOWN_S", "180.0"))
@@ -120,16 +121,35 @@ def handle_run(args) -> int:
         max_join_history=greeting_max_batch,
         greeting_user_cooldown_s=greeting_user_cooldown_s,
     )
+
+    try:
+        from auto_pitch import AutoPitchManager
+        pitch_mgr: AutoPitchManager | None = AutoPitchManager(
+            context_live_dir=os.getenv("CONTEXT_LIVE_DIR", "context-live"),
+            context_dir=os.getenv("CONTEXT_DIR", "context-data"),
+            buffer_size=int(os.getenv("IDLE_PITCH_BUFFER_SIZE", "10")),
+            min_s=float(os.getenv("IDLE_PITCH_MIN_S", "10.0")),
+            max_s=float(os.getenv("IDLE_PITCH_MAX_S", "30.0")),
+            enabled=os.getenv("IDLE_PITCH_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        )
+        pitch_mgr.clean_cache()
+    except Exception as _e:
+        print(f"[run] Không khởi tạo được AutoPitchManager: {_e}", flush=True)
+        pitch_mgr = None
+
     def on_audio_finish(item):
-        # Vua phat xong audio -> danh thuc worker lay ngay su kien moi nhat da gom.
-        # Cac su kien den trong luc dang phat/tao voice khong bi mat, chi giu ban moi nhat.
+        # Vừa phát xong audio -> đánh thức worker lấy ngay sự kiện mới nhất đã gom.
         collector.wake()
+        # Nếu là voice auto_pitch -> xoá file wav đã phát và tự động sinh bù 1 voice mới
+        if item and item.get("kind") == "auto_pitch" and pitch_mgr is not None:
+            pitch_mgr.on_pitch_finished(item, synthesize)
 
     queue = PriorityAudioQueue(
         on_play=play,
         on_finish=on_audio_finish,
         dry_run=no_play,
         interrupt_mode=interrupt_mode,
+        post_speech_padding_s=post_speech_padding_s,
     ).start()
     stop_event = threading.Event()
     stats = {"spoke": 0, "tts_ok": 0, "tts_fail": 0, "lat_ms": []}
@@ -293,6 +313,52 @@ def handle_run(args) -> int:
     # Luon khoi chay remind_worker (ben trong kiem tra dong r_en tu config de ho tro hot-reload)
     r_thread = threading.Thread(target=remind_worker, daemon=True, name="remind-loop")
     r_thread.start()
+
+    # Auto-pitch worker: tu dong phat 1 trong 10 voice trong buffer khi live khong co su kien
+    if pitch_mgr is not None:
+        pitch_mgr.trigger_refill(synthesize)
+
+        def auto_pitch_worker():
+            import random
+            while not stop_event.is_set():
+                try:
+                    import settings
+                    cur_cfg = settings.get()
+                    pitch_mgr.update_config(cur_cfg)
+                except Exception:
+                    pass
+
+                if not pitch_mgr.enabled:
+                    time.sleep(1.0)
+                    continue
+
+                delay = random.uniform(pitch_mgr.min_s, pitch_mgr.max_s)
+                elapsed = 0.0
+                while elapsed < delay and not stop_event.is_set():
+                    time.sleep(0.5)
+                    elapsed += 0.5
+                if stop_event.is_set() or not pitch_mgr.enabled:
+                    continue
+
+                # Phat khi audio queue dang ranh va khong co su kien uu tien cao
+                if queue.is_idle() and not collector.has_high_priority():
+                    p_item = pitch_mgr.pop_pitch()
+                    if p_item:
+                        w_path = Path(p_item.get("wav_path") or p_item.get("wav"))
+                        if w_path.is_file():
+                            queue.put("auto_pitch", 3, p_item["speak_text"], w_path)
+                            p_name = p_item.get("product_name") or "sản phẩm"
+                            print(
+                                f"[run/pitch] Tự động giới thiệu ({p_name}): '{p_item['speak_text']}' "
+                                f"-> wav={w_path.name} -> queue-size={queue.qsize()}"
+                                f"{' [no-play]' if no_play else ''}",
+                                flush=True,
+                            )
+                    else:
+                        pitch_mgr.trigger_refill(synthesize)
+
+        p_thread = threading.Thread(target=auto_pitch_worker, daemon=True, name="auto-pitch-loop")
+        p_thread.start()
     def worker(ev: dict) -> None:
         spoke = False
         try:
@@ -399,11 +465,13 @@ def _check_llm() -> tuple[bool, str]:
         t0 = time.perf_counter()
         reply = chat("Tra doi dung 1 tu.", "OK?", timeout=float(os.getenv("LLM_DOCTOR_TIMEOUT", "20")))
         ms = (time.perf_counter() - t0) * 1000
-        return True, f"OK {cfg['base_url']} model={cfg['model']} latency={ms:.0f}ms reply='{reply.strip()[:40]}'"
+        msg = f"OK {cfg['base_url']} model={cfg['model']} latency={ms:.0f}ms reply='{reply.strip()[:40]}'"
+        analyst_url = os.getenv("ANALYST_LLM_URL", "").strip()
+        if analyst_url:
+            msg += f" (Analyst URL: {analyst_url})"
+        return True, msg
     except Exception as e:
         return False, f"FAIL {type(e).__name__}: {e}"
-
-
 def _check_audio_device() -> tuple[bool, str]:
     name = audio_player.output_device_name()
     ok = not name.startswith(("unavailable", "error"))

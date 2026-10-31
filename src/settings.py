@@ -40,6 +40,9 @@ DEFAULTS: dict = {
     # Tat thinking cua model khi server ho tro -> LLM tra loi nhanh hon nhieu.
     "llm_disable_thinking": True,
     # Model AI chuyên phân tích bình luận/hoạt động để chọn đúng loại prompt.
+    # Địa chỉ API riêng cho Analyst LLM (để trống "" sẽ dùng chung llm_base_url).
+    "analyst_llm_url": "",
+    "analyst_llm_api_key": "",
     # Để trống "" = tắt phân tích bằng AI, dùng luật từ khoá dự phòng.
     "analyst_llm_model": "openrouter/typesafe/jev-1.13",
     "analyst_llm_timeout_s": 12,
@@ -53,9 +56,14 @@ DEFAULTS: dict = {
     "bridge_port": 8765,
     # Audio
     "audio_device": "",
+    "post_speech_padding_s": 0.35,
     "no_play": False,
     "interrupt_mode": "finish",
-    # Analyzer
+    # Idle Auto-Pitch (Tự động tạo 10 voice giới thiệu sản phẩm khi Live rảnh)
+    "idle_pitch_enabled": True,
+    "idle_pitch_buffer_size": 10,
+    "idle_pitch_min_s": 10.0,
+    "idle_pitch_max_s": 30.0,
     "prompts_dir": "prompts",
     "context_dir": "context-data",
     "context_live_dir": "context-live",
@@ -83,54 +91,66 @@ DEFAULTS: dict = {
 
 # Cac key duoc phep sua qua GUI. Nhom lai de GUI render theo section.
 SECTIONS: dict = {
+    "Bán hàng tự động (Auto-Pitch)": [
+        "idle_pitch_enabled",
+        "idle_pitch_buffer_size",
+        "idle_pitch_min_s",
+        "idle_pitch_max_s",
+        "remind_enabled",
+        "remind_min_s",
+        "remind_max_s",
+        "remind_text",
+    ],
+    "Âm thanh & VoiceStudio": [
+        "audio_device",
+        "post_speech_padding_s",
+        "voicestudio_url",
+        "voicestudio_voice",
+        "voicestudio_model",
+        "tts_timeout_s",
+        "no_play",
+        "interrupt_mode",
+    ],
     "LLM": [
         "llm_base_url",
         "llm_api_key",
         "llm_model",
         "llm_timeout_s",
         "llm_disable_thinking",
+        "analyst_llm_url",
+        "analyst_llm_api_key",
         "analyst_llm_model",
         "analyst_llm_timeout_s",
     ],
-    "VoiceStudio TTS": [
-        "voicestudio_url",
-        "voicestudio_voice",
-        "voicestudio_model",
-        "tts_timeout_s",
-    ],
-    "Event Bridge": ["bridge_url", "bridge_port"],
-    "Audio & Analyzer": [
-        "prompts_dir",
-        "context_dir",
-        "context_live_dir",
-        "batch_window_s",
-        "batch_max_events",
-        "audio_device",
-        "no_play",
-        "interrupt_mode",
-        "sales_max_words",
-        "remind_enabled",
-        "remind_min_s",
-        "remind_max_s",
-        "remind_text",
-        "out_dir",
+    "Tương tác & Lọc sự kiện": [
         "greeting_cooldown_s",
         "greeting_user_cooldown_s",
         "greeting_max_batch",
+        "sales_max_words",
         "chat_history_ttl_minutes",
+        "batch_window_s",
+        "batch_max_events",
     ],
-    "Trình duyệt / GoLogin": [
+    "Kết nối & Trình duyệt": [
+        "bridge_url",
+        "bridge_port",
+        "browser_mode",
         "gologin_dir",
         "gologin_profiles_dir",
         "gologin_active_version",
         "gologin_profile_id",
-        "browser_mode",
     ],
-    "Khác": ["log_level"],
+    "Hệ thống & Thư mục": [
+        "prompts_dir",
+        "context_dir",
+        "context_live_dir",
+        "out_dir",
+        "log_level",
+    ],
 }
 
 # Key bi mat - GUI hien thi dang che.
-SECRET_KEYS = {"llm_api_key"}
+SECRET_KEYS = {"llm_api_key", "analyst_llm_api_key"}
 
 _cache: dict | None = None
 
@@ -150,6 +170,8 @@ FIELD_DOCS: dict[str, str] = {
     "llm_api_key": "API Key để xác thực với server LLM (nếu server local không cần key thì để trống).",
     "llm_model": "Tên model LLM sinh lời thoại (ví dụ: claude-sonnet-5, gpt-4o-mini, qwen2.5-7b).",
     "llm_timeout_s": "Thời gian chờ tối đa (giây) cho mỗi yêu cầu gọi LLM trước khi tự động fallback.",
+    "analyst_llm_url": "Địa chỉ API riêng cho Analyst LLM (ví dụ: http://192.168.1.68:20130/v1 hoặc http://localhost:11434/v1). Để trống sẽ dùng chung địa chỉ với llm_base_url.",
+    "analyst_llm_api_key": "API Key riêng cho server Analyst LLM (nếu dùng server ngoài như OpenRouter, Groq...). Để trống sẽ dùng chung llm_api_key (hoặc không dùng key nếu server local).",
     "analyst_llm_model": "Model AI chuyên PHÂN TÍCH bình luận/hoạt động để biết khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, từ đó chọn đúng loại prompt. Ví dụ: openrouter/typesafe/jev-router. Bấm nút 'Tải danh sách model' ở tab Quản lý Prompt để chọn từ danh sách thật của server. Để trống để tắt phân tích bằng AI và dùng luật từ khoá dự phòng.",
     "analyst_llm_timeout_s": "Thời gian chờ tối đa (giây) cho bước phân tích ý định. Nếu quá hạn sẽ tự động dùng luật từ khoá dự phòng.",
     "llm_disable_thinking": "Tắt chế độ suy luận (thinking) của model LLM khi server hỗ trợ — câu trả lời ra nhanh hơn, chất lượng câu không đổi. Tắt nếu server báo lỗi 400 khi thấy tham số 'thinking'.",
@@ -165,6 +187,11 @@ FIELD_DOCS: dict[str, str] = {
     "batch_window_s": "Thời gian cửa sổ gom sự kiện (giây, mặc định 5.0s). Sự kiện ưu tiên cao sẽ được tạo voice ngay.",
     "batch_max_events": "Số lượng sự kiện tối đa được xử lý trong 1 batch để tránh quá tải bộ nhớ.",
     "audio_device": "Thiết bị âm thanh đầu ra để phát voice (Loa máy tính hoặc CABLE Input để đưa vào OBS).",
+    "post_speech_padding_s": "Thời gian đệm sau khi phát xong câu (giây, mặc định 0.35s) để tránh ngắt từ cuối và tạo nhịp nghỉ tự nhiên.",
+    "idle_pitch_enabled": "Bật/Tắt tính năng tự động tạo voice giới thiệu sản phẩm và phát khi live rảnh.",
+    "idle_pitch_buffer_size": "Số lượng voice ngẫu nhiên các sản phẩm được tạo sẵn lưu trong cache (mặc định 10 voice).",
+    "idle_pitch_min_s": "Khoảng cách thời gian tối thiểu (giây) giữa 2 lần tự động giới thiệu sản phẩm khi live rảnh (mặc định 10s).",
+    "idle_pitch_max_s": "Khoảng cách thời gian tối đa (giây) giữa 2 lần tự động giới thiệu sản phẩm khi live rảnh (mặc định 30s).",
     "no_play": "Chế độ chạy thử nghiệm: sinh text và audio đầy đủ nhưng không phát ra loa.",
     "interrupt_mode": "Chính sách ngắt: 'finish' (đọc trọn vẹn câu hiện tại rồi mới đọc câu tiếp); 'interrupt' (ngắt ngay khi có đơn hàng/quà).",
     "sales_max_words": "Độ dài tối đa của câu tư vấn sản phẩm (50-100 từ) giúp câu trả lời đầy đủ thông tin chi tiết.",
@@ -385,9 +412,11 @@ def _bridge_port_from_url(url: str, fallback: int) -> int:
 
 def apply(cfg: dict | None = None) -> dict:
     """Ap cau hinh vao cac module runtime. An toan neu module chua import duoc."""
+    global _cache
     merged = dict(DEFAULTS)
     if cfg is not None:
         merged.update(cfg)
+        _cache = dict(merged)
     else:
         merged.update(get())
     cfg = merged
@@ -422,6 +451,8 @@ def apply(cfg: dict | None = None) -> dict:
     os.environ["LLM_API_KEY"] = str(cfg["llm_api_key"])
     os.environ["LLM_TIMEOUT_S"] = str(float(cfg["llm_timeout_s"]))
     os.environ["LLM_DISABLE_THINKING"] = "1" if cfg.get("llm_disable_thinking", True) else "0"
+    os.environ["ANALYST_LLM_URL"] = str(cfg.get("analyst_llm_url", "")).rstrip("/")
+    os.environ["ANALYST_LLM_API_KEY"] = str(cfg.get("analyst_llm_api_key", ""))
     os.environ["ANALYST_LLM_MODEL"] = str(cfg.get("analyst_llm_model", ""))
     os.environ["ANALYST_LLM_TIMEOUT_S"] = str(float(cfg.get("analyst_llm_timeout_s", 12)))
     os.environ["PROMPTS_DIR"] = str(cfg.get("prompts_dir", "prompts"))
@@ -441,7 +472,12 @@ def apply(cfg: dict | None = None) -> dict:
 
     # audio_player doc os.environ moi lan phat -> set env la du (process moi thua huong)
     os.environ["AUDIO_OUTPUT_DEVICE"] = str(cfg["audio_device"])
+    os.environ["POST_SPEECH_PADDING_S"] = str(float(cfg.get("post_speech_padding_s", 0.35)))
     os.environ["INTERRUPT_MODE"] = str(cfg.get("interrupt_mode", "finish"))
+    os.environ["IDLE_PITCH_ENABLED"] = "true" if cfg.get("idle_pitch_enabled", True) else "false"
+    os.environ["IDLE_PITCH_BUFFER_SIZE"] = str(int(cfg.get("idle_pitch_buffer_size", 10)))
+    os.environ["IDLE_PITCH_MIN_S"] = str(float(cfg.get("idle_pitch_min_s", 10.0)))
+    os.environ["IDLE_PITCH_MAX_S"] = str(float(cfg.get("idle_pitch_max_s", 30.0)))
     # analyzer
     try:
         import event_analyzer  # type: ignore

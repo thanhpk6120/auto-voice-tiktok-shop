@@ -489,7 +489,11 @@ def test_reload_keeps_context_prices_and_survives_fetch_failure(monkeypatch):
         prod = {"id": "777", "name": "Ao Thun Nam", "url": "u", "price": "35.000\u20ab"}
         bm.save_product_context({**prod, "real_price": "5.000\u20ab", "list_price": "35.000\u20ab"}, live_dir=tmp_dir)
 
-        root = tk.Tk()
+        try:
+            root = tk.Tk()
+        except Exception:
+            import pytest
+            pytest.skip("Cannot create Tk display")
         root.withdraw()
         try:
             app = gui.App(root, cfg={"context_live_dir": str(tmp_dir)})

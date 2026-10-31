@@ -97,7 +97,60 @@ def filter_batch_events(
     return filtered, joined_users
 
 
-def parse_llm_json_response(raw_text: str) -> list[dict]:
+def _extract_complete_json_objects(text: str) -> list[dict]:
+    """Cứu các object {...} hoàn chỉnh nếu mảng JSON bị cắt cụt giữa chừng."""
+    out: list[dict] = []
+    pos = 0
+    try:
+        import json_utils
+    except ImportError:
+        json_utils = None
+
+    while True:
+        start = text.find("{", pos)
+        if start < 0:
+            break
+        depth = 0
+        in_str = False
+        escaped = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end > 0:
+            chunk = text[start:end + 1]
+            obj = json_utils.parse_json_loose(chunk, default=None) if json_utils else None
+            if not isinstance(obj, dict):
+                try:
+                    obj = json.loads(chunk)
+                except Exception:
+                    obj = None
+            if isinstance(obj, dict):
+                out.append(obj)
+            pos = end + 1
+        else:
+            break
+    return out
+
+
+def parse_llm_json_response(raw_text: str, fallback_events: list[dict] | None = None) -> list[dict]:
     """Bóc tách và chuẩn hóa mảng JSON từ phản hồi của LLM."""
     if not raw_text:
         return []
@@ -109,12 +162,11 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
     except ImportError:
         json_utils = None  # type: ignore[assignment]
 
+    data = None
     if json_utils is not None:
         data = json_utils.parse_json_loose(raw_text, default=None)
         if isinstance(data, dict):
             data = json_utils.as_list(data)
-        if not isinstance(data, list):
-            return []
     else:
         cleaned = raw_text.strip()
         if "```" in cleaned:
@@ -131,10 +183,25 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
             try:
                 data = json.loads(fixed)
             except Exception:
-                return []
-        if not isinstance(data, list):
-            return []
+                data = None
 
+    if not isinstance(data, list) or not data:
+        # Cứu các object {...} hoàn chỉnh nếu mảng JSON bị cắt cụt giữa chừng
+        data = _extract_complete_json_objects(raw_text)
+
+    # Nếu vẫn không ra object nào mà raw_text là câu thoại tiếng Việt thông thường (LLM quên format JSON):
+    if not data and raw_text and fallback_events:
+        cleaned = raw_text.strip()
+        if "```" in cleaned:
+            cleaned = re.sub(r"```[a-zA-Z]*\n?|```", "", cleaned).strip()
+        if "{" not in cleaned and "[" not in cleaned and len(cleaned) >= 10:
+            first_ev = fallback_events[0]
+            data = [{
+                "type": first_ev.get("type") or first_ev.get("kind") or "chat",
+                "user": first_ev.get("user") or "Khách",
+                "text": cleaned,
+                "priority": first_ev.get("priority", 2),
+            }]
     valid_items: list[dict] = []
     for item in data:
         if not isinstance(item, dict):
@@ -145,7 +212,13 @@ def parse_llm_json_response(raw_text: str) -> list[dict]:
             item.get("text")
             or item.get("speak_text")
             or item.get("speakText")
+            or item.get("content")
+            or item.get("message")
+            or item.get("reply")
+            or item.get("response")
+            or item.get("answer")
             or item.get("noi_dung")
+            or item.get("cau_tra_loi")
             or ""
         ).strip()
         if not raw_text_val:
@@ -614,8 +687,12 @@ def process_event_batch(
                 import llm_client as _llm  # type: ignore
 
         try:
-            raw_response = _llm.chat(system_prompt, user_prompt)
-            items = parse_llm_json_response(raw_response)
+            needed_tokens = max(600, len(group_payload) * 220)
+            try:
+                raw_response = _llm.chat(system_prompt, user_prompt, max_tokens=needed_tokens)
+            except TypeError:
+                raw_response = _llm.chat(system_prompt, user_prompt)
+            items = parse_llm_json_response(raw_response, fallback_events=group_events)
             if items:
                 # Ghi lại đúng loại/priority theo nhóm intent (LLM đôi khi nhầm)
                 for it in items:
@@ -633,7 +710,8 @@ def process_event_batch(
                 ucm.cleanup_expired()
                 all_items.extend(items)
             else:
-                print(f"[batch_processor] LLM nhóm '{group_intent}' trả về rỗng / không parse được JSON, dùng fallback cục bộ", flush=True)
+                snippet = (raw_response or "").strip().replace("\n", " ")[:150]
+                print(f"[batch_processor] LLM nhóm '{group_intent}' trả về rỗng / không parse được JSON (raw: {snippet!r}), dùng fallback cục bộ", flush=True)
                 for fallback in _local_fallback_items(group_events):
                     all_items.append(fallback)
         except Exception as e:

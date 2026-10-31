@@ -14,8 +14,15 @@ for p in (str(ROOT / "src"), str(ROOT)):
         sys.path.insert(0, p)
 
 import settings  # noqa: E402
+import pytest
 
 
+@pytest.fixture(autouse=True)
+def clean_settings():
+    saved = dict(settings.get())
+    yield
+    settings.reset()
+    settings.apply(saved)
 def test_apply_sets_tts_client():
     import tts_client
 
@@ -39,13 +46,16 @@ def test_apply_sets_llm_config_and_env():
     cfg["llm_model"] = "model-abc"
     cfg["llm_api_key"] = "sk-live-abcdefghijkl"
     cfg["llm_disable_thinking"] = False
+    cfg["analyst_llm_url"] = "http://10.2.2.2:2222/v1"
+    cfg["analyst_llm_api_key"] = "sk-analyst-12345"
     settings.apply(cfg)
 
     assert os.environ["LLM_BASE_URL"] == "http://10.1.1.1:1111/v1"
     assert os.environ["LLM_MODEL"] == "model-abc"
     assert os.environ["LLM_API_KEY"] == "sk-live-abcdefghijkl"
     assert os.environ["LLM_DISABLE_THINKING"] == "0"
-
+    assert os.environ["ANALYST_LLM_URL"] == "http://10.2.2.2:2222/v1"
+    assert os.environ["ANALYST_LLM_API_KEY"] == "sk-analyst-12345"
 
 def test_llm_client_reads_config_at_call_time():
     """llm_client.chat() phai doc base url luc goi, khong bind cung luc import."""
@@ -73,9 +83,12 @@ def test_analyzer_configure_applies_cooldown_and_batch():
 def test_masked_hides_api_key():
     cfg = settings.get()
     cfg["llm_api_key"] = "sk-live-verysecretvalue123"
+    cfg["analyst_llm_api_key"] = "sk-analyst-verysecretvalue456"
     m = settings.masked(cfg)
     assert "verysecretvalue" not in m["llm_api_key"]
     assert m["llm_api_key"].startswith("sk-liv")
+    assert "verysecretvalue" not in m["analyst_llm_api_key"]
+    assert m["analyst_llm_api_key"].startswith("sk-ana")
 
 
 def test_config_path_writable_location():
@@ -111,3 +124,32 @@ def test_apply_sets_batch_and_prompts_env():
     assert os.environ.get("CONTEXT_DIR") == "my-context"
     assert os.environ.get("BATCH_WINDOW_S") == "7.5"
     assert os.environ.get("BATCH_MAX_EVENTS") == "15"
+
+def test_analyst_llm_custom_url_wired():
+    """Kiem tra custom analyst_llm_url duoc intent_router va llm_client truyen dung."""
+    import intent_router
+    from unittest.mock import patch
+
+    cfg = settings.get()
+    cfg["analyst_llm_url"] = "http://192.168.1.99:9999/v1"
+    cfg["analyst_llm_model"] = "test-analyst-model"
+    cfg["analyst_llm_api_key"] = "sk-analyst-key-456"
+    settings.apply(cfg)
+
+    assert intent_router._analyst_url() == "http://192.168.1.99:9999/v1"
+    assert intent_router._analyst_api_key() == "sk-analyst-key-456"
+
+    captured = {}
+    def fake_chat(sys_p, usr_p, model=None, timeout=None, base_url=None, api_key=None):
+        captured["base_url"] = base_url
+        captured["model"] = model
+        captured["api_key"] = api_key
+        return '{"intent": "greeting", "confidence": 0.9}'
+
+    with patch("llm_client.chat", side_effect=fake_chat):
+        intent_router.clear_intent_cache()
+        res = intent_router.classify_intent("xin chao shop nhe")
+        assert res.get("intent") == "greeting"
+        assert captured.get("base_url") == "http://192.168.1.99:9999/v1"
+        assert captured.get("model") == "test-analyst-model"
+        assert captured.get("api_key") == "sk-analyst-key-456"

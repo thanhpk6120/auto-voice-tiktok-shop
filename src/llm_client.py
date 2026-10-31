@@ -105,7 +105,7 @@ _model_meta: dict[str, dict] = {}
 _model_meta_loaded = False
 
 
-def _load_model_meta() -> dict[str, dict]:
+def _load_model_meta(base_url: str | None = None) -> dict[str, dict]:
     """Doc danh sach model tu server, lay 'thinkingCanDisable' + 'thinkingFormat'.
 
     Server that (192.168.1.68) tra metadata: model nao tat duoc thinking, va
@@ -113,26 +113,29 @@ def _load_model_meta() -> dict[str, dict]:
     tranh 1-2 request 400 thu lai.
     """
     global _model_meta_loaded
-    if _model_meta_loaded:
-        return _model_meta
-    _model_meta_loaded = True
     cfg = _llm_cfg()
+    base = (base_url or cfg["base_url"]).rstrip("/")
+    if _model_meta_loaded and (base_url is None or base == cfg["base_url"].rstrip("/")):
+        return _model_meta
+    if base_url is None:
+        _model_meta_loaded = True
     try:
         req = urllib.request.Request(
-            f"{cfg['base_url']}/models",
+            f"{base}/models",
             headers={"Content-Type": "application/json",
                      **({"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {})},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
+        meta = dict(_model_meta) if base_url else _model_meta
         for m in data.get("data") or []:
             mid = str(m.get("id") or "")
             if mid:
-                _model_meta[mid] = m.get("capabilities") or {}
+                meta[mid] = m.get("capabilities") or {}
+        return meta
     except Exception:
         pass
     return _model_meta
-
 
 # Cac tham so tat thinking, thu theo thu tu.
 # Do duoc tren server that (2026-10): voi model dang dung,
@@ -146,9 +149,9 @@ _THINKING_SHAPES: list[dict] = [
 ]
 
 
-def _preferred_payloads(model: str) -> list[dict]:
+def _preferred_payloads(model: str, base_url: str | None = None) -> list[dict]:
     """Thu tu payload tat thinking cho model nay (doc tu metadata server)."""
-    meta = _load_model_meta().get(model) or {}
+    meta = _load_model_meta(base_url=base_url).get(model) or {}
     if meta.get("thinkingCanDisable") is False:
         # Server noi ro model nay khong tat duoc thinking -> khong phai gay loi 400.
         return []
@@ -156,12 +159,21 @@ def _preferred_payloads(model: str) -> list[dict]:
 
 
 
-def chat(system: str, user: str, model: str | None = None, timeout: float | None = None) -> str:
-    # Doc dong tu settings: GUI doi key/url/model co tac dung ngay.
+def chat(
+    system: str,
+    user: str,
+    model: str | None = None,
+    timeout: float | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
     cfg = _llm_cfg()
 
     timeout = cfg["timeout"] if timeout is None else timeout
-    url = f"{cfg['base_url']}/chat/completions"
+    base = (base_url or cfg["base_url"]).rstrip("/")
+    key = cfg["api_key"] if api_key is None else api_key
+    url = f"{base}/chat/completions"
     model_name = model or cfg["model"]
     base_payload = {
         "model": model_name,
@@ -170,11 +182,11 @@ def chat(system: str, user: str, model: str | None = None, timeout: float | None
             {"role": "user", "content": user},
         ],
         "stream": False,
-        "max_tokens": 180,
+        "max_tokens": max_tokens or 800,
     }
     headers = {"Content-Type": "application/json"}
-    if cfg["api_key"]:
-        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
 
     # Tay thinking: server that ho tro, tat duoc -> nhanh hon nhieu.
     # Do duoc tren server that cua user: reasoning tokens 302 -> 0,
@@ -182,7 +194,7 @@ def chat(system: str, user: str, model: str | None = None, timeout: float | None
     # Ten tham so khac nhau theo backend -> lay 'thinkingFormat' tu /v1/models
     # de chon dung thu tu, tranh request 400 thu lai.
     disable_thinking = cfg["disable_thinking"]
-    variants = _preferred_payloads(model_name) if disable_thinking else []
+    variants = _preferred_payloads(model_name, base_url=base) if disable_thinking else []
     if model_name in _thinking_cache:
         idx = _thinking_cache[model_name]
         if idx is None:
@@ -228,7 +240,14 @@ def chat(system: str, user: str, model: str | None = None, timeout: float | None
     raise RuntimeError(f"LLM chat failed: {last_err}") from last_err
 
 
-def decide(model: str, state: str, questions: dict, timeout: float | None = None) -> dict:
+def decide(
+    model: str,
+    state: str,
+    questions: dict,
+    timeout: float | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict:
     """Goi endpoint '/systemone' (decision model) -> tra 'answers'.
 
     Decision model khong dung duoc voi /chat/completions. Payload:
@@ -237,11 +256,12 @@ def decide(model: str, state: str, questions: dict, timeout: float | None = None
     cfg = _llm_cfg()
 
     timeout = cfg["timeout"] if timeout is None else timeout
-    base = cfg["base_url"]
+    base = (base_url or cfg["base_url"]).rstrip("/")
+    key = cfg["api_key"] if api_key is None else api_key
     payload = {"model": model, "state": state, "questions": questions}
     headers = {"Content-Type": "application/json"}
-    if cfg["api_key"]:
-        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(
         f"{base}/systemone", data=json.dumps(payload).encode("utf-8"),
         headers=headers, method="POST")

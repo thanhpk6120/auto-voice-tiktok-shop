@@ -141,17 +141,23 @@ def resolve_voice(name: str) -> tuple[str, str]:
     )
 
 
-def synthesize(text: str, out_dir: str | Path = "out") -> Path:
+def synthesize(text: str, out_dir: str | Path = "out", out_path: str | Path | None = None) -> Path:
     """Gửi text sang VoiceStudio; fail thì fallback tạo sine wav."""
     global VOICESTUDIO_OK, LAST_ENGINE
-    p = Path(out_dir)
-    if not p.is_absolute():
-        p = _project_root() / p
-    p.mkdir(parents=True, exist_ok=True)
+    if out_path is not None:
+        wav_path = Path(out_path)
+        if not wav_path.is_absolute():
+            wav_path = _project_root() / wav_path
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        p = Path(out_dir)
+        if not p.is_absolute():
+            p = _project_root() / p
+        p.mkdir(parents=True, exist_ok=True)
 
-    ts = int(time.time() * 1000)
-    h = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8]
-    wav_path = p / f"tts_{ts}_{h}.wav"
+        ts = int(time.time() * 1000)
+        h = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8]
+        wav_path = p / f"tts_{ts}_{h}.wav"
 
     voice_id, _warn = resolve_voice(VOICE_NAME)
     if _warn:

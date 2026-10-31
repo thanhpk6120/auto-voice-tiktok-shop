@@ -29,6 +29,7 @@ class PriorityAudioQueue:
         dry_run: bool = False,
         queue_limit: int = 50,
         interrupt_mode: str = "finish",
+        post_speech_padding_s: float = 0.35,
     ):
         self._q: queue.PriorityQueue = queue.PriorityQueue()
         self._counter = itertools.count()
@@ -37,6 +38,7 @@ class PriorityAudioQueue:
         self._dry_run = dry_run or on_play is None
         self._on_finish = on_finish
         self.interrupt_mode = interrupt_mode
+        self.post_speech_padding_s = max(0.05, float(post_speech_padding_s))
         self._stop = threading.Event()
         self._interrupt = threading.Event()
         self._lock = threading.Lock()
@@ -159,6 +161,7 @@ class PriorityAudioQueue:
                     self._on_finish(item)
                 except Exception:
                     pass
-            # Khoang nghi tu nhien giua 2 cau phat lien tiep
-            time.sleep(0.08)
+            # Khoảng nghỉ tự nhiên sau phát để không bị ngắt chữ cuối và xả sạch audio buffer
+            pad = max(0.08, float(getattr(self, "post_speech_padding_s", 0.35)))
+            time.sleep(pad)
             self._interrupt.clear()

@@ -130,7 +130,8 @@ def test_gui_notebook_tabs_and_actions():
         assert set(settings.SECTIONS.keys()).issubset(set(tab_names))
         assert app.log is not None
         assert hasattr(app, "log_frame")
-
+        assert hasattr(app, "paned")
+        assert len(app.paned.panes()) == 2
         # Kiem tra toolbar log
         assert hasattr(app, "clear_log")
         assert hasattr(app, "copy_log")

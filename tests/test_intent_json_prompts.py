@@ -7,7 +7,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+for p in (str(ROOT / "src"), str(ROOT)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import json_utils  # noqa: E402
 import intent_router  # noqa: E402
@@ -250,11 +252,17 @@ def test_batch_parse_uses_lenient_json():
 def test_analyst_model_config_exists():
     import settings
 
+    assert "analyst_llm_url" in settings.DEFAULTS
+    assert "analyst_llm_url" in settings.SECTIONS["LLM"]
+    assert "analyst_llm_url" in settings.FIELD_DOCS
+    assert "analyst_llm_api_key" in settings.DEFAULTS
+    assert "analyst_llm_api_key" in settings.SECTIONS["LLM"]
+    assert "analyst_llm_api_key" in settings.FIELD_DOCS
+    assert "analyst_llm_api_key" in settings.SECRET_KEYS
     assert "analyst_llm_model" in settings.DEFAULTS
     assert "analyst_llm_model" in settings.SECTIONS["LLM"]
     assert "analyst_llm_model" in settings.FIELD_DOCS
     assert "analyst_llm_timeout_s" in settings.DEFAULTS
-
 
 # ----------------------------- hành vi ghi đè / tên file -----------------------------
 
@@ -358,11 +366,13 @@ def test_analyst_model_syncs_to_llm_tab_field():
     """Lưu model ở tab Quản lý Prompt phải đồng bộ sang _Field để không bị ghi đè."""
     src = (ROOT / "src" / "gui.py").read_text(encoding="utf-8")
     i = src.index("def _save_analyst_model")
-    block = src[i:i + 900]
+    block = src[i:i + 1200]
     assert "f.key == \"analyst_llm_model\"" in block
     assert "f.set_value(model)" in block
-
-
+    assert "f.key == \"analyst_llm_url\"" in block
+    assert "f.set_value(url)" in block
+    assert "f.key == \"analyst_llm_api_key\"" in block
+    assert "f.set_value(key)" in block
 def test_build_spec_includes_new_modules():
     spec = (ROOT / "build.spec").read_text(encoding="utf-8")
     assert '"json_utils"' in spec

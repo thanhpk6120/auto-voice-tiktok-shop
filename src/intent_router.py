@@ -50,16 +50,15 @@ _CACHE_MAX: int = 500
 _intent_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _cache_key(text: str, model: str = "") -> str:
+def _cache_key(text: str, model: str = "", url: str = "") -> str:
     """Khoa cache: bo khoang trang thua + chuan hoa chu thuong.
 
-    KE include model analyst: app hot-reload config (app.py) doi model ma khong
-    xoa cache (GUI chay process khac) -> khoa theo text don thuan se tra ket qua
-    cua model cu trong toi 300s. Khoa theo (text, model) tu chua lanh.
+    KE include model analyst va url: app hot-reload config (app.py) doi model hoac url
+    ma khong xoa cache (GUI chay process khac) -> khoa theo (text, model, url) tu chua lanh.
     """
     body = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    return f"{model}\x00{body}"
-
+    tag = f"{url}@{model}" if url else model
+    return f"{tag}\x00{body}"
 
 def clear_intent_cache() -> None:
     """Xoa cache phan loai (goi khi doi model analyst)."""
@@ -186,8 +185,10 @@ def classify_intent(
         timeout = _analyst_timeout()
 
     # Cache: comment trung lap -> tra ket qua da phan loai, khong goi lai model.
-    # Khoa gom model: doi model analyst (app hot-reload config) -> khoa doi -> goi lai.
-    cache_key = _cache_key(raw, cfg_model or "")
+    # Khoa gom model va url: doi model/url analyst (app hot-reload config) -> khoa doi -> goi lai.
+    cfg_url = _analyst_url()
+    cfg_key = _analyst_api_key()
+    cache_key = _cache_key(raw, cfg_model or "", cfg_url)
     hit = _intent_cache.get(cache_key)
     if hit and (time.monotonic() - hit[0]) < _CACHE_TTL_S:
         cached = dict(hit[1])
@@ -228,8 +229,21 @@ def classify_intent(
         # Decision model (TypeSafe/jev): goi endpoint '/systemone', khong phai chat/completions.
         try:
             import llm_client
-            answers = llm_client.decide(
-                cfg_model, raw[:600], _decision_questions(), timeout=timeout)
+            if cfg_url or cfg_key:
+                kw = {}
+                if cfg_url:
+                    kw["base_url"] = cfg_url
+                if cfg_key:
+                    kw["api_key"] = cfg_key
+                try:
+                    answers = llm_client.decide(
+                        cfg_model, raw[:600], _decision_questions(), timeout=timeout, **kw)
+                except TypeError:
+                    answers = llm_client.decide(
+                        cfg_model, raw[:600], _decision_questions(), timeout=timeout)
+            else:
+                answers = llm_client.decide(
+                    cfg_model, raw[:600], _decision_questions(), timeout=timeout)
             ans = answers.get("intent") or {}
             intent = str(ans.get("choice") or "").strip().lower()
             if intent in VALID_INTENTS:
@@ -260,7 +274,18 @@ def classify_intent(
                 products="\n".join(names) or "(chưa có danh sách)",
                 text=raw[:600],
             )
-            reply = llm_client.chat(sys_p, usr_p, model=cfg_model, timeout=timeout)
+            if cfg_url or cfg_key:
+                kw = {}
+                if cfg_url:
+                    kw["base_url"] = cfg_url
+                if cfg_key:
+                    kw["api_key"] = cfg_key
+                try:
+                    reply = llm_client.chat(sys_p, usr_p, model=cfg_model, timeout=timeout, **kw)
+                except TypeError:
+                    reply = llm_client.chat(sys_p, usr_p, model=cfg_model, timeout=timeout)
+            else:
+                reply = llm_client.chat(sys_p, usr_p, model=cfg_model, timeout=timeout)
             data = json_utils.as_dict(json_utils.parse_json_loose(reply, default={}))
             intent = str(data.get("intent") or "").strip().lower()
             intent = re.sub(r"[^a-z_]", "", intent.replace(" ", "_"))
@@ -320,6 +345,22 @@ def _analyst_model() -> str:
         return os.getenv("ANALYST_LLM_MODEL", "").strip()
 
 
+def _analyst_url() -> str:
+    """Địa chỉ API cho bước phân tích (rỗng = dùng chung llm_base_url)."""
+    try:
+        import settings
+        return str(settings.get().get("analyst_llm_url") or "").strip().rstrip("/")
+    except Exception:
+        return os.getenv("ANALYST_LLM_URL", "").strip().rstrip("/")
+
+
+def _analyst_api_key() -> str:
+    """API Key riêng cho bước phân tích (rỗng = dùng chung llm_api_key)."""
+    try:
+        import settings
+        return str(settings.get().get("analyst_llm_api_key") or "").strip()
+    except Exception:
+        return os.getenv("ANALYST_LLM_API_KEY", "").strip()
 def classify_intent_rules(text: str) -> dict:
     """Phân loại dự phòng bằng regex khi không có model phân tích."""
     s = str(text or "").lower().strip()

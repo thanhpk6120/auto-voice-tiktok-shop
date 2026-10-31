@@ -311,6 +311,10 @@ class _Field:
         else:
             if self.key == "analyst_llm_model" and hasattr(app, "analyst_model_var"):
                 self.var = app.analyst_model_var
+            elif self.key == "analyst_llm_url" and hasattr(app, "analyst_url_var"):
+                self.var = app.analyst_url_var
+            elif self.key == "analyst_llm_api_key" and hasattr(app, "analyst_key_var"):
+                self.var = app.analyst_key_var
             else:
                 self.var = tk.StringVar(value="" if self.original is None else str(self.original))
             if self.key == "audio_device":
@@ -434,8 +438,8 @@ class App:
         self.devices_dirty = False
 
         root.title(TITLE)
-        root.minsize(920, 680)
-        self._center_window(1040, 780)
+        root.minsize(1020, 720)
+        self._center_window(1150, 840)
         self._setup_styles()
 
         self.device_widget = None
@@ -445,16 +449,19 @@ class App:
         # 1. Thanh hanh dong o duoi cung nhat
         self._build_actions(root)
 
-        # 2. Khung log hoat dong luon hien thi o duoi cung (Khong nam trong tab)
-        self.log_frame = ttk.LabelFrame(root, text="Log hoạt động (Thời gian thực)", padding=6)
-        self.log_frame.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
+        # 2. PanedWindow doc cho phep nguoi dung keo co gian giua Notebook va Khung Log
+        self.paned = ttk.PanedWindow(root, orient="vertical")
+        self.paned.pack(side="top", fill="both", expand=True, padx=8, pady=(6, 2))
+
+        # 3. Notebook o phan tren cua PanedWindow
+        self.nb = ttk.Notebook(self.paned)
+        self.paned.add(self.nb, weight=3)
+
+        # 4. Khung log hoat dong o phan duoi cua PanedWindow (keo co gian tuy y)
+        self.log_frame = ttk.LabelFrame(self.paned, text="Log hoạt động (Thời gian thực - kéo mép để co giãn)", padding=6)
         self._build_log_panel(self.log_frame)
+        self.paned.add(self.log_frame, weight=2)
         self.tab_log = self.log_frame
-
-        # 3. Notebook o phan tren
-        self.nb = ttk.Notebook(root)
-        self.nb.pack(side="top", fill="both", expand=True, padx=8, pady=6)
-
         # 1. Tab Trang thai (Theo dõi trực tiếp, hàng đợi & thống kê)
         self.tab_status = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_status, text="Trạng thái")
@@ -473,11 +480,12 @@ class App:
         # 4. Các tab cấu hình theo thứ tự ưu tiên vận hành:
         # Trình duyệt -> VoiceStudio TTS -> LLM -> Audio & Analyzer -> Event Bridge -> Khác
         preferred_sections = [
-            "Trình duyệt / GoLogin",
-            "VoiceStudio TTS",
+            "Bán hàng tự động (Auto-Pitch)",
+            "Âm thanh & VoiceStudio",
             "LLM",
-            "Audio & Analyzer",
-            "Event Bridge",
+            "Tương tác & Lọc sự kiện",
+            "Kết nối & Trình duyệt",
+            "Hệ thống & Thư mục",
         ]
         config_frames: dict[str, ttk.Frame] = {}
         self.fields: list[_Field] = []
@@ -907,13 +915,34 @@ class App:
         model_box = ttk.LabelFrame(pad, text="Model AI phân tích bình luận (chọn đúng loại prompt)", padding=8)
         model_box.pack(fill="x", pady=(0, 8))
 
+        row_url = ttk.Frame(model_box)
+        row_url.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_url, text="URL Analyst LLM:", width=16, anchor="w").pack(side="left", padx=(0, 6))
+        self.analyst_url_var = tk.StringVar(value=str(self.cfg.get("analyst_llm_url", "")))
+        self.analyst_url_entry = ttk.Entry(row_url, textvariable=self.analyst_url_var, width=54)
+        self.analyst_url_entry.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        ToolTip(
+            self.analyst_url_entry,
+            "Địa chỉ API riêng cho Analyst LLM (ví dụ: http://192.168.1.68:20130/v1 hoặc http://localhost:11434/v1). Để trống sẽ dùng chung địa chỉ với llm_base_url.",
+        )
+
+        row_key = ttk.Frame(model_box)
+        row_key.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_key, text="API Key (nếu có):", width=16, anchor="w").pack(side="left", padx=(0, 6))
+        self.analyst_key_var = tk.StringVar(value=str(self.cfg.get("analyst_llm_api_key", "")))
+        self.analyst_key_entry = ttk.Entry(row_key, textvariable=self.analyst_key_var, width=54, show="*")
+        self.analyst_key_entry.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        ToolTip(
+            self.analyst_key_entry,
+            "API Key riêng cho server Analyst LLM (nếu dùng server ngoài như OpenRouter, Groq...). Để trống sẽ dùng chung llm_api_key.",
+        )
         row = ttk.Frame(model_box)
         row.pack(fill="x")
-        ttk.Label(row, text="Model phân tích:").pack(side="left", padx=(0, 6))
+        ttk.Label(row, text="Model phân tích:", width=16, anchor="w").pack(side="left", padx=(0, 6))
 
         self.analyst_model_var = tk.StringVar(value=str(self.cfg.get("analyst_llm_model", "")))
-        self.analyst_combo = ttk.Combobox(row, textvariable=self.analyst_model_var, width=52)
-        self.analyst_combo.pack(side="left", padx=(0, 6))
+        self.analyst_combo = ttk.Combobox(row, textvariable=self.analyst_model_var, width=42)
+        self.analyst_combo.pack(side="left", padx=(0, 6), fill="x", expand=True)
         ToolTip(
             self.analyst_combo,
             "Model AI dùng để PHÂN TÍCH bình luận/hoạt động xem khách đang chào hỏi, hỏi sản phẩm, chốt đơn hay tặng quà, "
@@ -922,12 +951,11 @@ class App:
 
         btn_models = ttk.Button(row, text="⬇ Tải danh sách model", command=self._fetch_ai_models)
         btn_models.pack(side="left", padx=4)
-        ToolTip(btn_models, "Gọi API /v1/models của server LLM để lấy danh sách model thật, gồm cả các model jev đang có.")
+        ToolTip(btn_models, "Gọi API /v1/models của server Analyst LLM (hoặc server LLM nếu để trống) để lấy danh sách model thật, gồm cả các model jev đang có.")
 
-        btn_save_model = ttk.Button(row, text="💾 Lưu model", command=self._save_analyst_model)
+        btn_save_model = ttk.Button(row, text="💾 Lưu cấu hình", command=self._save_analyst_model)
         btn_save_model.pack(side="left", padx=4)
-        ToolTip(btn_save_model, "Áp dụng model phân tích đang chọn cho phiên chạy hiện tại và lưu vào file cấu hình.")
-
+        ToolTip(btn_save_model, "Áp dụng URL và model phân tích đang chọn cho phiên chạy hiện tại và lưu vào file cấu hình.")
         self.analyst_status_var = tk.StringVar(value="")
         ttk.Label(model_box, textvariable=self.analyst_status_var, foreground="#4a5568").pack(
             anchor="w", pady=(6, 0)
@@ -1046,12 +1074,13 @@ class App:
             messagebox.showerror("Lỗi", f"Không thể mở thư mục: {e}")
 
     def _fetch_ai_models(self) -> None:
-        """Lấy danh sách model thật từ /v1/models của server LLM."""
-        base = str(self.cfg.get("llm_base_url", "")).strip().rstrip("/")
+        """Lấy danh sách model thật từ /v1/models của server Analyst LLM (hoặc server LLM nếu trống)."""
+        url_input = self.analyst_url_var.get().strip() if hasattr(self, "analyst_url_var") else ""
+        base = (url_input or str(self.cfg.get("analyst_llm_url", "")) or str(self.cfg.get("llm_base_url", ""))).strip().rstrip("/")
         if not base:
-            messagebox.showinfo("Thông báo", "Chưa cấu hình llm_base_url trong tab LLM.")
+            messagebox.showinfo("Thông báo", "Chưa cấu hình analyst_llm_url hoặc llm_base_url trong tab LLM.")
             return
-        self.analyst_status_var.set("Đang tải danh sách model...")
+        self.analyst_status_var.set(f"Đang tải danh sách model từ {base}...")
 
         def _run() -> None:
             import json as _json
@@ -1059,7 +1088,8 @@ class App:
 
             url = f"{base}/models"
             headers = {"User-Agent": "AutoVoiceTikTokShop/1.0"}
-            key = str(self.cfg.get("llm_api_key", "")).strip()
+            key_input = self.analyst_key_var.get().strip() if hasattr(self, "analyst_key_var") else ""
+            key = (key_input or str(self.cfg.get("analyst_llm_api_key", "")) or str(self.cfg.get("llm_api_key", ""))).strip()
             if key:
                 headers["Authorization"] = f"Bearer {key}"
             try:
@@ -1072,29 +1102,38 @@ class App:
             except Exception as e:
                 self.root.after(0, lambda: self.analyst_status_var.set(f"Lỗi tải danh sách model: {e}"))
                 return
-            self.root.after(0, lambda: self._apply_model_list(ids))
+            self.root.after(0, lambda: self._apply_model_list(ids, base))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _apply_model_list(self, ids: list[str]) -> None:
+    def _apply_model_list(self, ids: list[str], base: str = "") -> None:
         self.analyst_combo["values"] = ids
         jev = [m for m in ids if "jev" in m.lower()]
+        target_str = f" từ {base}" if base else ""
         self.analyst_status_var.set(
-            f"Đã tải {len(ids)} model. Model jev: {', '.join(jev) if jev else 'không có'}."
+            f"Đã tải {len(ids)} model{target_str}. Model jev: {', '.join(jev) if jev else 'không có'}."
         )
         if jev and not self.analyst_model_var.get().strip():
             self.analyst_model_var.set(jev[0])
-        self._write(f"[model] Tải được {len(ids)} model từ server.")
+        self._write(f"[model] Tải được {len(ids)} model{target_str}.")
 
     def _save_analyst_model(self) -> None:
         model = self.analyst_model_var.get().strip()
+        url = self.analyst_url_var.get().strip() if hasattr(self, "analyst_url_var") else ""
+        key = self.analyst_key_var.get().strip() if hasattr(self, "analyst_key_var") else ""
         self.cfg["analyst_llm_model"] = model
+        self.cfg["analyst_llm_url"] = url
+        self.cfg["analyst_llm_api_key"] = key
         # Đồng bộ sang widget ở tab LLM, nếu không thì lần bấm "Lưu cấu hình"/"Bắt đầu"
         # sẽ đọc giá trị cũ từ _Field và ghi đè mất model vừa chọn.
         for f in getattr(self, "fields", []):
             try:
                 if f.key == "analyst_llm_model":
                     f.set_value(model)
+                elif f.key == "analyst_llm_url":
+                    f.set_value(url)
+                elif f.key == "analyst_llm_api_key":
+                    f.set_value(key)
             except Exception:
                 pass
         try:
@@ -1105,11 +1144,11 @@ class App:
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không lưu được cấu hình: {e}")
             return
-        self.analyst_status_var.set(
-            f"Đã lưu model phân tích: {model or '(trống - dùng luật từ khoá dự phòng)'}"
-        )
-        self._write(f"[model] analyst_llm_model = {model or '(trống)'}")
-
+        status = f"Đã lưu model phân tích: {model or '(trống - dùng luật từ khoá dự phòng)'}"
+        if url:
+            status += f" | URL: {url}"
+        self.analyst_status_var.set(status)
+        self._write(f"[model] analyst_llm_model = {model or '(trống)'}, analyst_llm_url = {url or '(mặc định)'}")
 
     # ------------------------------ tab Huong dan Clone Giong ------------------------------
     def _build_clone_guide_tab(self, parent) -> None:
@@ -1146,7 +1185,7 @@ class App:
 
         ttk.Label(toolbar, text="Lọc:").pack(side="left", padx=(2, 4))
         self.log_filter_var = tk.StringVar(value="Tất cả")
-        filters = ["Tất cả", "[app]", "[cdp]", "[doctor]", "[check]", "[save]", "[run]", "[gui]", "[browser]"]
+        filters = ["Tất cả", "[app]", "[pitch]", "[batch]", "[cdp]", "[doctor]", "[check]", "[save]", "[run]", "[gui]", "[browser]"]
         self.filter_cb = ttk.Combobox(toolbar, textvariable=self.log_filter_var, values=filters, state="readonly", width=12)
         self.filter_cb.pack(side="left", padx=2)
         self.filter_cb.bind("<<ComboboxSelected>>", self._on_filter_changed)
@@ -1158,7 +1197,7 @@ class App:
         ttk.Button(toolbar, text="Sao chép log", command=self.copy_log).pack(side="left", padx=3)
         ttk.Button(toolbar, text="Mở thư mục log", command=self.open_log_dir).pack(side="left", padx=3)
 
-        self.log = scrolledtext.ScrolledText(parent, height=10, state="disabled", wrap="word", font=("Consolas", 9))
+        self.log = scrolledtext.ScrolledText(parent, height=15, state="disabled", wrap="word", font=("Consolas", 9))
         self.log.pack(fill="both", expand=True, padx=2, pady=(2, 2))
 
     _build_log_tab = _build_log_panel
@@ -1313,23 +1352,29 @@ class App:
             pass
 
     def _build_actions(self, root) -> None:
-        bar = ttk.Frame(root, padding=(8, 6))
+        bar = ttk.Frame(root, padding=(10, 8))
         bar.pack(side="bottom", fill="x")
 
-        ttk.Button(bar, text="▶ Khởi động", command=self.start, style="Primary.TButton").pack(side="left", padx=3)
-        ttk.Button(bar, text="⏹ Dừng", command=self.stop, style="Danger.TButton").pack(side="left", padx=3)
+        # Cụm Vận hành
+        ttk.Button(bar, text="▶ Khởi động Live", command=self.start, style="Primary.TButton").pack(side="left", padx=4)
+        ttk.Button(bar, text="⏹ Dừng Live", command=self.stop, style="Danger.TButton").pack(side="left", padx=4)
 
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=6, pady=2)
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=2)
 
-        ttk.Button(bar, text="💾 Lưu cấu hình", command=self.save).pack(side="left", padx=3)
-        ttk.Button(bar, text="🔌 Kiểm tra kết nối", command=self.check_connections).pack(side="left", padx=3)
-        ttk.Button(bar, text="🩺 Chẩn đoán (doctor)", command=self.doctor).pack(side="left", padx=3)
-        ttk.Button(bar, text="🔄 Đọc lại", command=self.reload).pack(side="left", padx=3)
-        ttk.Button(bar, text="📂 Mở file config", command=self.open_config).pack(side="left", padx=3)
+        # Cụm Cấu hình
+        ttk.Button(bar, text="💾 Lưu cấu hình", command=self.save).pack(side="left", padx=4)
+        ttk.Button(bar, text="🔄 Đọc lại", command=self.reload).pack(side="left", padx=4)
+        ttk.Button(bar, text="📂 Mở file config", command=self.open_config).pack(side="left", padx=4)
 
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8, pady=2)
+
+        # Cụm Kiểm tra & Chẩn đoán
+        ttk.Button(bar, text="🔌 Kiểm tra kết nối", command=self.check_connections).pack(side="left", padx=4)
+        ttk.Button(bar, text="🩺 Chẩn đoán (doctor)", command=self.doctor).pack(side="left", padx=4)
+
+        # Cụm Công cụ mô phỏng
         self.sim_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Mô phỏng (--sim)", variable=self.sim_var).pack(side="right", padx=6)
-
+        ttk.Checkbutton(bar, text="Mô phỏng (--sim)", variable=self.sim_var).pack(side="right", padx=8)
     @staticmethod
     def num_ok(proposed: str, is_float: bool) -> bool:
         if proposed in ("", "-", "+", "."):
@@ -1865,6 +1910,10 @@ class App:
                 f.set_value(self.cfg[f.key])
         if hasattr(self, "analyst_model_var"):
             self.analyst_model_var.set(str(self.cfg.get("analyst_llm_model", "")))
+        if hasattr(self, "analyst_url_var"):
+            self.analyst_url_var.set(str(self.cfg.get("analyst_llm_url", "")))
+        if hasattr(self, "analyst_key_var"):
+            self.analyst_key_var.set(str(self.cfg.get("analyst_llm_api_key", "")))
         self._fill_devices()
         self._write("đã đọc lại config từ đĩa")
     def open_config(self) -> None:

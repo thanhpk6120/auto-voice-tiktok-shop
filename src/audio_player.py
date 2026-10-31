@@ -75,7 +75,7 @@ def output_device_name() -> str:
         return f"error: {type(e).__name__}: {e}"
 
 
-def play_wav(wav_path: str | Path, stop_event=None, tail_padding_s: float = 0.25) -> bool:
+def play_wav(wav_path: str | Path, stop_event=None, tail_padding_s: float = 0.35) -> bool:
     """Phat file wav. Tra False neu bi ngat (stop_event duoc set) giua chung.
     tail_padding_s: them khoang lang o cuoi buffer va doi buffer driver xa het
     de dam bao tu cuoi cung khong bi cat cut boi hardware / driver buffer."""

@@ -120,7 +120,14 @@ class StatusCounters:
         if parsed is not None:
             raw_ev = parsed["event"]
             base_ev = raw_ev.split("(")[0].strip()
-            self.events[base_ev] = self.events.get(base_ev, 0) + 1
+            # Map các loại sự kiện xử lý (sales, greeting) về nhóm hiển thị chuẩn (chat, join)
+            if base_ev in ("sales", "product_question"):
+                target_ev = "chat"
+            elif base_ev in ("greeting", "join", "joined"):
+                target_ev = "join"
+            else:
+                target_ev = base_ev
+            self.events[target_ev] = self.events.get(target_ev, 0) + 1
             self.total_events += 1
             if parsed["queue_size"] is not None:
                 self.queue_size = parsed["queue_size"]
@@ -135,6 +142,9 @@ class StatusCounters:
         if m_played:
             self.played = int(m_played.group(1))
 
+        m_q = re.search(r"(?:queue_size|queue-size|hàng_đợi_còn_lại)\s*[:=]\s*(\d+)", line)
+        if m_q:
+            self.queue_size = int(m_q.group(1))
         m_intr = re.search(r"(?:'|\")?interrupted(?:'|\")?\s*[:=]\s*(\d+)", line)
         if m_intr:
             self.interrupted = int(m_intr.group(1))

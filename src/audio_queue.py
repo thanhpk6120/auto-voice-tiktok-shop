@@ -156,6 +156,7 @@ class PriorityAudioQueue:
                         self.stats["dropped_requeue"] += 1
             else:
                 self.stats["played"] += 1
+                print(f"[queue/stat] played={self.stats['played']} queue-size={self.qsize()}", flush=True)
             if self._on_finish is not None:
                 try:
                     self._on_finish(item)

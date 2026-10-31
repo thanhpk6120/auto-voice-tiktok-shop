@@ -49,8 +49,7 @@ _PITCH_FORMULAS = {
     ],
     # 3. Kích thích Freeship & Gom đơn (Freeship & Bundle Incentive)
     "freeship": [
-        "Món {name} hôm nay được áp mã freeship extra và voucher sốc đó cả nhà. Giá chỉ có {price}, cả nhà gom thêm cho đủ đơn để được miễn phí vận chuyển nhé!",
-        "Ai chưa áp được mã freeship thì bấm ngay giỏ hàng góc trái chọn {name} giá {price} nha, shop có sẵn voucher hỗ trợ ship cho cả nhà luôn ạ!",
+        "Món {name} hôm nay được áp mã freeship extra và voucher sốc đó cả nhà. Giá chỉ có {price}, cả nhà gom thêm cho đủ đơn rồi bấm giỏ hàng góc trái để được miễn phí vận chuyển nhé!",
         "Đặt {name} hôm nay có trợ giá {price} lại được thêm mã giảm phí ship, cả nhà bấm góc trái đặt luôn kẻo hết mã vận chuyển nhé!",
     ],
     # 4. Đánh giá tốt & Uy tín chất lượng (Social Proof & Trust)
